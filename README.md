@@ -152,3 +152,4 @@ The earlier version that identified players by printed codes is saved in `../las
 - On iPhones older than iOS 17, the silent switch mutes the game. Flip it off to hear the shots.
 - First visit downloads about 21 MB of AI (runtime and model), cached after that. The lobby starts loading it early.
 - If the host leaves mid-game, the game still ends on time, but only the host can start another round.
+# lasertag
