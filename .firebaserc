@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "demo-laser-tag",
+    "prod": "phone-laser-tag-vyck"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "laser-tag",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "assets": "node scripts/copy-assets.mjs",
+    "predev": "npm run assets",
+    "dev": "vite",
+    "emulators": "PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:start --only auth,database",
+    "phones": "npm run assets && PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:exec --only auth,database \"vite --port 4630 --strictPort\"",
+    "laptop": "npm run assets && PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" LT_HTTP=1 firebase emulators:exec --only auth,database \"vite --port 4634 --strictPort\"",
+    "prebuild": "npm run assets",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.ts",
+    "test:rules": "PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:exec --only database \"vitest run --config vitest.rules.config.ts\"",
+    "test:e2e": "npm run assets && PATH=\"/opt/homebrew/opt/openjdk/bin:$PATH\" firebase emulators:exec --only auth,database \"node tests/e2e/run.mjs\"",
+    "test:sounds": "node tests/sound/check.mjs",
+    "deploy": "npm run build && firebase deploy --only hosting,database,auth --project prod"
+  },
+  "dependencies": {
+    "@fontsource/press-start-2p": "5.3.0",
+    "@fontsource/vt323": "5.3.0",
+    "@mediapipe/tasks-vision": "^1.2.0",
+    "firebase": "^13.1.0",
+    "lucide-react": "1.56.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright-core": "^1.64.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

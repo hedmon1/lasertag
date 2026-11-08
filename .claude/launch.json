@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "laser-tag-phones",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "npm run assets && PATH=/opt/homebrew/opt/openjdk/bin:$PATH firebase emulators:exec --only auth,database 'npx vite --port 4630 --strictPort'"],
+      "port": 4630
+    },
+    {
+      "name": "laser-tag-laptop",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "npm run assets && PATH=/opt/homebrew/opt/openjdk/bin:$PATH LT_HTTP=1 firebase emulators:exec --only auth,database 'npx vite --port 4634 --strictPort'"],
+      "port": 4634
+    }
+  ]
+}

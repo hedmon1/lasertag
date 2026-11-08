@@ -1,0 +1,128 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "games": {
+      "$code": {
+        "meta": {
+          ".read": "auth != null",
+          ".write": "auth != null && ((!data.exists() && newData.child('host').val() == auth.uid && $code.matches(/^[A-HJ-NP-Z]{4}$/)) || (data.exists() && data.child('host').val() == auth.uid))",
+          ".validate": "newData.hasChildren(['host', 'state', 'createdAt', 'rules'])",
+          "host": {
+            ".validate": "newData.val() == auth.uid && (!data.exists() || data.val() == newData.val())"
+          },
+          "createdAt": {
+            ".validate": "(data.exists() && newData.val() == data.val()) || (!data.exists() && newData.val() == now)"
+          },
+          "state": {
+            ".validate": "newData.val() == data.val() || (!data.exists() && newData.val() == 'lobby') || (data.val() == 'lobby' && newData.val() == 'live' && newData.parent().child('startAt').val() >= now + 2000) || (data.val() == 'live' && newData.val() == 'ended') || (data.val() == 'ended' && newData.val() == 'lobby')"
+          },
+          "startAt": {
+            ".validate": "newData.isNumber() && (newData.val() == data.val() || (data.parent().child('state').val() == 'lobby' && newData.parent().child('state').val() == 'live' && newData.val() >= now + 2000 && newData.val() <= now + 15000))"
+          },
+          "endAt": {
+            ".validate": "newData.isNumber() && (newData.val() == data.val() || newData.val() == newData.parent().child('startAt').val() + newData.parent().child('rules').child('durationMs').val())"
+          },
+          "rules": {
+            ".validate": "newData.hasChildren(['hp', 'damage', 'cooldownMs', 'respawnMs', 'protectMs', 'durationMs', 'killLimit'])",
+            "hp": { ".validate": "newData.val() == 100" },
+            "damage": { ".validate": "newData.val() == 25" },
+            "cooldownMs": { ".validate": "newData.val() == 350" },
+            "protectMs": { ".validate": "newData.val() == 2000" },
+            "respawnMs": {
+              ".validate": "newData.isNumber() && newData.val() >= 3000 && newData.val() <= 30000 && (newData.val() == data.val() || root.child('games').child($code).child('meta').child('state').val() != 'live')"
+            },
+            "durationMs": {
+              ".validate": "newData.isNumber() && newData.val() >= 60000 && newData.val() <= 3600000 && (newData.val() == data.val() || root.child('games').child($code).child('meta').child('state').val() != 'live')"
+            },
+            "killLimit": {
+              ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 50 && (newData.val() == data.val() || root.child('games').child($code).child('meta').child('state').val() != 'live')"
+            },
+            "$other": { ".validate": false }
+          },
+          "$other": { ".validate": false }
+        },
+
+        "slots": {
+          ".read": "auth != null",
+          "$slot": {
+            ".write": "auth != null && root.child('games').child($code).child('meta').child('state').val() == 'lobby' && ((!data.exists() && newData.val() == auth.uid && newData.parent().parent().child('players').child(auth.uid).child('slot').val() + '' == $slot && (!root.child('games').child($code).child('players').child(auth.uid).exists() || root.child('games').child($code).child('players').child(auth.uid).child('slot').val() == -1)) || (data.val() == auth.uid && !newData.exists() && newData.parent().parent().child('players').child(auth.uid).child('slot').val() + '' != $slot))",
+            ".validate": "$slot.matches(/^[01]$/) && newData.isString()"
+          }
+        },
+
+        "players": {
+          ".read": "auth != null && data.child(auth.uid).exists()",
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid && !data.exists() && root.child('games').child($code).child('meta').child('state').val() == 'lobby'",
+            ".validate": "newData.hasChildren(['name', 'joinedAt', 'slot', 'life', 'fired', 'lastShotAt']) && newData.child('slot').val() >= 0",
+            "name": {
+              ".write": "auth != null && auth.uid == $uid",
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 16"
+            },
+            "joinedAt": {
+              ".validate": "(data.exists() && newData.val() == data.val()) || (!data.exists() && newData.val() == now)"
+            },
+            "slot": {
+              ".write": "auth != null && auth.uid == $uid && root.child('games').child($code).child('meta').child('state').val() == 'lobby'",
+              ".validate": "newData.isNumber() && (newData.val() == -1 || (newData.val() >= 0 && newData.val() < 2 && newData.parent().parent().parent().child('slots').child(newData.val() + '').val() == auth.uid))"
+            },
+            "online": {
+              ".write": "auth != null && auth.uid == $uid",
+              ".validate": "newData.isBoolean()"
+            },
+            "fired": {
+              ".write": "auth != null && (auth.uid == $uid || (root.child('games').child($code).child('meta').child('host').val() == auth.uid && newData.val() == 0))",
+              ".validate": "newData.isNumber() && ((newData.val() == 0 && root.child('games').child($code).child('meta').child('state').val() != 'live') || (data.exists() && newData.val() == data.val() + 1))"
+            },
+            "lastShotAt": {
+              ".write": "auth != null && auth.uid == $uid",
+              ".validate": "newData.isNumber() && (newData.val() == now || (newData.val() == 0 && !data.exists()))"
+            },
+            "life": {
+              ".write": "auth != null && (((auth.uid != $uid) && newData.child('shot').val() != data.child('shot').val() && newData.parent().parent().parent().child('shots').child(newData.child('shot').val()).child('by').val() == auth.uid && newData.parent().parent().parent().child('shots').child(newData.child('shot').val()).child('target').val() == $uid && !root.child('games').child($code).child('shots').child(newData.child('shot').val()).exists() && data.child('alive').val() == true && newData.child('seq').val() == data.child('seq').val() + 1 && newData.child('spawnAt').val() == data.child('spawnAt').val() && ((data.child('hp').val() > root.child('games').child($code).child('meta').child('rules').child('damage').val() && newData.child('hp').val() == data.child('hp').val() - root.child('games').child($code).child('meta').child('rules').child('damage').val() && newData.child('alive').val() == true && newData.child('diedAt').val() == 0) || (data.child('hp').val() <= root.child('games').child($code).child('meta').child('rules').child('damage').val() && newData.child('hp').val() == 0 && newData.child('alive').val() == false && newData.child('diedAt').val() == now))) || (auth.uid == $uid && data.child('alive').val() == false && root.child('games').child($code).child('meta').child('state').val() == 'live' && now >= data.child('diedAt').val() + root.child('games').child($code).child('meta').child('rules').child('respawnMs').val() && newData.child('hp').val() == root.child('games').child($code).child('meta').child('rules').child('hp').val() && newData.child('alive').val() == true && newData.child('seq').val() == data.child('seq').val() + 1 && newData.child('shot').val() == '' && newData.child('diedAt').val() == 0 && newData.child('spawnAt').val() == now) || ((auth.uid == $uid || root.child('games').child($code).child('meta').child('host').val() == auth.uid) && root.child('games').child($code).child('meta').child('state').val() != 'live' && newData.child('hp').val() == root.child('games').child($code).child('meta').child('rules').child('hp').val() && newData.child('alive').val() == true && newData.child('shot').val() == '' && newData.child('diedAt').val() == 0 && newData.child('spawnAt').val() == 0 && newData.child('seq').val() == data.child('seq').val() + 1))",
+              ".validate": "newData.hasChildren(['hp', 'alive', 'seq', 'shot', 'diedAt', 'spawnAt'])",
+              "hp": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+              "alive": { ".validate": "newData.isBoolean()" },
+              "seq": { ".validate": "newData.isNumber()" },
+              "shot": { ".validate": "newData.isString()" },
+              "diedAt": { ".validate": "newData.isNumber()" },
+              "spawnAt": { ".validate": "newData.isNumber()" },
+              "$other": { ".validate": false }
+            },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "shots": {
+          ".read": "auth != null && root.child('games').child($code).child('players').child(auth.uid).exists()",
+          ".write": "auth != null && root.child('games').child($code).child('meta').child('host').val() == auth.uid && !newData.exists() && root.child('games').child($code).child('meta').child('state').val() != 'live'",
+          "$id": {
+            ".write": "auth != null && !data.exists() && newData.child('by').val() == auth.uid",
+            ".validate": "newData.hasChildren(['by', 'target', 'via', 'dist', 'at', 'kill']) && root.child('games').child($code).child('meta').child('state').val() == 'live' && now >= root.child('games').child($code).child('meta').child('startAt').val() && now < root.child('games').child($code).child('meta').child('endAt').val() && newData.child('target').val() != auth.uid && root.child('games').child($code).child('players').child(auth.uid).child('slot').val() >= 0 && root.child('games').child($code).child('players').child(auth.uid).child('life').child('alive').val() == true && now >= root.child('games').child($code).child('players').child(auth.uid).child('lastShotAt').val() + root.child('games').child($code).child('meta').child('rules').child('cooldownMs').val() && newData.parent().parent().child('players').child(auth.uid).child('lastShotAt').val() == now && root.child('games').child($code).child('players').child(newData.child('target').val()).child('slot').val() >= 0 && root.child('games').child($code).child('players').child(newData.child('target').val()).child('life').child('alive').val() == true && now >= root.child('games').child($code).child('players').child(newData.child('target').val()).child('life').child('spawnAt').val() + root.child('games').child($code).child('meta').child('rules').child('protectMs').val() && newData.parent().parent().child('players').child(newData.child('target').val()).child('life').child('shot').val() == $id && newData.child('kill').val() == (newData.parent().parent().child('players').child(newData.child('target').val()).child('life').child('hp').val() == 0)",
+            "by": { ".validate": "newData.isString()" },
+            "target": { ".validate": "newData.isString()" },
+            "via": { ".validate": "newData.val() == 'ai'" },
+            "dist": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 200" },
+            "at": { ".validate": "newData.val() == now" },
+            "kill": { ".validate": "newData.isBoolean()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "killcams": {
+          ".write": "auth != null && root.child('games').child($code).child('meta').child('host').val() == auth.uid && !newData.exists() && root.child('games').child($code).child('meta').child('state').val() != 'live'",
+          "$id": {
+            ".read": "auth != null && (root.child('games').child($code).child('shots').child($id).child('target').val() == auth.uid || root.child('games').child($code).child('shots').child($id).child('by').val() == auth.uid)",
+            ".write": "auth != null && !data.exists() && newData.child('by').val() == auth.uid && root.child('games').child($code).child('shots').child($id).child('by').val() == auth.uid",
+            ".validate": "newData.hasChildren(['by', 'target', 'jpg']) && newData.child('target').val() == root.child('games').child($code).child('shots').child($id).child('target').val()",
+            "by": { ".validate": "newData.isString()" },
+            "target": { ".validate": "newData.isString()" },
+            "jpg": { ".validate": "newData.isString() && newData.val().length < 150000 && newData.val().beginsWith('data:image/jpeg;base64,')" },
+            "$other": { ".validate": false }
+          }
+        }
+      }
+    }
+  }
+}

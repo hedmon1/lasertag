@@ -1,0 +1,13 @@
+// Copies MediaPipe's WebAssembly runtime into public/ so the body AI loads from this site
+// instead of a CDN. Runs before dev, build and the E2E test.
+import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const from = join(root, 'node_modules/@mediapipe/tasks-vision/wasm');
+const to = join(root, 'public/mediapipe/wasm');
+if (!existsSync(from)) throw new Error('Run npm install first: @mediapipe/tasks-vision is missing.');
+mkdirSync(to, { recursive: true });
+cpSync(from, to, { recursive: true });
+console.log('MediaPipe runtime copied to public/mediapipe/wasm');

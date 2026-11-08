@@ -1,0 +1,9 @@
+node_modules
+dist
+public/mediapipe
+*.log
+.env*.local
+tests/e2e/out
+tests/e2e/fixtures/*.y4m
+tests/e2e/fixtures/*.gray
+tests/sound/out
