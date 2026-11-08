@@ -17,6 +17,8 @@ Details that make it reliable:
 
 **Who shot them and how:** the victim sees *"Hit by Ann. 6 m"*. The distance is estimated from how tall they looked, assuming a standing 1.7 m adult. When eliminated, they see a **kill cam** photo from the shooter's camera at the moment of the shot.
 
+**What the shooter sees:** a hit marker on a hit, red on the kill, and nothing else. A miss shows nothing on screen (sometimes a ricochet sound). A shot at a player who is down or just respawned doesn't count, so it gets no marker either.
+
 **Server rules:** the database (`database.rules.json`) accepts a hit only if the game is live, both players are alive, the shooter isn't the target, the damage is exactly 25, the cooldown has passed and spawn protection is over. A hit is one atomic write, so it can never apply twice.
 
 ## Sounds
@@ -32,11 +34,11 @@ All synthesized in the browser, no audio files. Phone speakers can't play bass, 
 
 ## The look
 
-Retro arcade, after [stakeupapp.com](https://stakeupapp.com/): pixel type (Press Start 2P for labels and buttons, VT323 for text), deep navy-purple with flat lime, cyan, yellow and magenta, thick black outlines with hard offset shadows, and CRT scanlines over every screen, the camera view included. Menu screens add the starfield and the moving grid floor. The fonts are bundled with the app, so they also work offline on `npm run phones`.
+Retro arcade, after [stakeupapp.com](https://stakeupapp.com/): pixel type (Press Start 2P for labels and buttons, VT323 for text), deep navy-purple with flat lime, cyan, yellow and magenta, thick black outlines with hard offset shadows, and CRT scanlines on the menu screens and on every button. The camera view itself stays clean. Menu screens add the starfield and the moving grid floor, and the home screen is an arcade cabinet: chasing marquee lights, a screen running a demo match (1P sweeps the reticle onto 2P, fires, and knocks out a health block), a joystick deck and a scrolling ticker with the rules. The fonts are bundled with the app, so they also work offline on `npm run phones`.
 
 ## The gun
 
-A small pixel-art pistol sits in the lower right of the camera view. Each shot kicks it back, cycles the slide, flashes the muzzle, ejects a casing and sends a tracer into the crosshair. A reload dips it, swaps the magazine and racks the slide, in time with the reload sound.
+A first-person blaster in a gloved hand sits small in the lower right corner, the way blocky shooters show your weapon. Its back sits just above the Fire button and the barrel stops well short of the crosshair, so it covers about 5% of the screen and stays out of the way of what you aim at. It is a small 3D model built from boxes (`src/ui/gunModel.ts`) and projected through a camera that looks at the crosshair, so the barrel always points at it, with shaded faces and pixel details: a glowing energy window on the back, vents and a lime strip on the side. Each shot kicks it back, cycles the slide, flashes the muzzle, ejects a casing and sends a tracer into the crosshair. A reload drops and tips it for the magazine swap and brings it back up to rack the slide, in time with the reload sound. The hand runs on behind the Fire button.
 
 ## Play it
 
@@ -97,7 +99,7 @@ Weapon: 12 shots, 1.8 s reload, at most one shot every 350 ms. **Scope** (hold):
 
 ```bash
 npm run typecheck
-npm test            # 19 unit tests: hit area, lag window, distance, crosshair lock, health rules, scoreboard
+npm test            # 24 unit tests: hit area, lag window, distance, crosshair lock, health rules, scoreboard, gun aim
 npm run test:rules  # 39 database rules tests on the emulator, with two separate signed-in players
 npm run test:e2e    # two Chrome browsers with fake cameras play a full game on the emulators
 npm run test:sounds # renders every sound and checks it (no emulators needed)
@@ -107,7 +109,7 @@ npm run test:sounds # renders every sound and checks it (no emulators needed)
 
 The E2E test runs a dev build with `?testdetector=1`, which swaps the AI for a stand-in that treats a magenta rectangle as a person. This test switch only exists in dev builds. Ann's fake camera films the rectangle and Bob's films an empty room.
 
-It checks a full game. A third player is turned away, Ann's crosshair locks on and Bob's doesn't, and Bob's shot at an empty room misses. Ann's gun recoils and fires a tracer, and each phone plays the right sounds: its own shots, the other player's shots, the hits, the kill and the elimination. Ann's four hits drop Bob's health step by step, Bob sees "Hit by Ann" and then the kill cam, and he can't be hit while down. After that: respawn, spawn protection, a correct scoreboard, and Play again.
+It checks a full game. A third player is turned away, Ann's crosshair locks on and Bob's doesn't, and Bob's shot at an empty room misses with nothing on screen. Ann's gun recoils and fires a tracer, and each phone plays the right sounds: its own shots, the other player's shots, the hits, the kill and the elimination. Ann's four hits drop Bob's health step by step while Ann sees only hit markers (red on the kill), Bob sees "Hit by Ann" and then the kill cam, and he can't be hit while down. After that: respawn, spawn protection, a correct scoreboard, and Play again.
 
 The real AI model was checked separately in Chrome. It loads, runs on the GPU at about 15 checks a second, and finds no one in an empty room. Whether it reliably finds real players can only be checked with real people (see below).
 
@@ -135,7 +137,9 @@ src/
   game/rules.ts             health, respawn and protection (mirrored by database.rules.json)
   net/game.ts               every database write the game makes
   ui/sound.ts               synthesized gunshots, impacts, reload; starts audio on the first tap
-  ui/Gun.tsx                the on-screen pixel pistol: recoil, muzzle flash, casing, tracer, reload
+  ui/gunModel.ts            the first-person gun as 3D boxes, projected to aim at the crosshair (pure, unit tested)
+  ui/Gun.tsx                draws it: recoil, muzzle flash, casing, tracer, reload
+  ui/Arcade.tsx             the home screen's cabinet art: the demo match and the control deck
   ui/theme.css              the arcade look: colours, pixel fonts, panels, HUD, CRT scanlines
   screens/                  Home, Lobby, Live, Scoreboard, Practice, RangeTest
 tests/unit  tests/rules  tests/e2e  tests/sound
@@ -152,4 +156,5 @@ The earlier version that identified players by printed codes is saved in `../las
 - On iPhones older than iOS 17, the silent switch mutes the game. Flip it off to hear the shots.
 - First visit downloads about 21 MB of AI (runtime and model), cached after that. The lobby starts loading it early.
 - If the host leaves mid-game, the game still ends on time, but only the host can start another round.
+# lasertag
 # lasertag
