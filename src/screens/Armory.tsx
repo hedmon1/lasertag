@@ -25,6 +25,7 @@ export function Armory() {
   const [viewing, setViewing] = useState<GunId>(equipped);
   const [kick, setKick] = useState(0);
   const timers = useRef<number[]>([]);
+  const display = useRef<HTMLElement>(null);
   const g = gunById(viewing);
 
   useEffect(() => {
@@ -63,9 +64,9 @@ export function Armory() {
         <div className="brand grow" style={{ textAlign: 'right' }}>Armory</div>
       </div>
 
-      <section className="display" style={{ '--accent': g.color } as CSSProperties} aria-label={`${g.name}, ${g.kind}`}>
+      <section ref={display} className="display" style={{ '--accent': g.color } as CSSProperties} aria-label={`${g.name}, ${g.kind}`}>
         <div className="display-stage">
-          <GunPreview key={kick} id={g.id} w={320} h={140} className={kick ? 'kick' : ''} />
+          <GunPreview key={kick} id={g.id} w={320} h={140} className={kick ? 'kick' : ''} flash={kick > 0} />
         </div>
         <div className="display-body">
           <div className="display-title">
@@ -83,7 +84,7 @@ export function Armory() {
           <p className="small muted">
             {MODE[g.mode](g)} · Reload {(g.reloadMs / 1000).toFixed(1)} s · Scope {g.scope}x
           </p>
-          <div className="row">
+          <div className="row display-actions">
             <button className="btn grow" onClick={testFire}><Volume2 />Test fire</button>
             <button className="btn btn-primary grow" disabled={isEquipped} onClick={equip}>
               <Check />
@@ -100,7 +101,12 @@ export function Armory() {
             className={`gun-tile${x.id === viewing ? ' on' : ''}`}
             style={{ '--accent': x.color } as CSSProperties}
             aria-pressed={x.id === viewing}
-            onClick={() => setViewing(x.id)}
+            onClick={() => {
+              setViewing(x.id);
+              // The case is above the grid: bring it back into view to show the pick.
+              const top = display.current?.getBoundingClientRect().top ?? 0;
+              if (top < 0) display.current?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            }}
           >
             <GunPreview id={x.id} w={150} h={66} />
             <span className="gun-tile-name">{x.name}</span>

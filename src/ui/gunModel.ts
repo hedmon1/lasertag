@@ -273,6 +273,8 @@ export function buildGun(shape: GunShape, pose = FIRST_PERSON): GunModel {
 
 export interface Showcase {
   parts: { body: Poly[]; action: Poly[] };
+  /** The end of the barrel, for a muzzle flash. */
+  muzzle: V2;
   width: number;
   height: number;
 }
@@ -305,5 +307,6 @@ export function buildShowcase(shape: GunShape, w: number, h: number): Showcase {
   const ox = (w - s * (x1 - x0)) / 2, oy = (h - s * (y1 - y0)) / 2;
   const at = ([x, y]: V2): V2 => [ox + (x - x0) * s, oy + (y - y0) * s];
   const out = (ps: RawPoly[]) => ps.map((p) => ({ points: fmt(p.pts, at), fill: p.fill, outline: p.outline }));
-  return { parts: { body: out(raw.body), action: out(raw.action) }, width: w, height: h };
+  const muzzle = at(view.project([-c[0], shape.bore - c[1], shape.muzzle - c[2]]));
+  return { parts: { body: out(raw.body), action: out(raw.action) }, muzzle, width: w, height: h };
 }

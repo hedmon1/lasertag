@@ -4,14 +4,22 @@ import { killFeed, scoreboard, type ShotRecord } from '../../src/game/score.ts';
 
 describe('life and rules', () => {
   const R = DEFAULT_RULES;
-  it('takes four hits to go down at default rules', () => {
+  it('takes four 25-damage hits to go down', () => {
     let l = freshLife(R);
     for (let i = 1; i <= 3; i++) {
-      l = lifeAfterHit(l, R, `s${i}`, 500);
+      l = lifeAfterHit(l, 25, `s${i}`, 500);
       expect(l).toMatchObject({ hp: 100 - 25 * i, alive: true, seq: i, shot: `s${i}`, diedAt: 0 });
     }
-    l = lifeAfterHit(l, R, 's4', 500);
+    l = lifeAfterHit(l, 25, 's4', 500);
     expect(l).toMatchObject({ hp: 0, alive: false, seq: 4, diedAt: 500 });
+  });
+
+  it('never goes below zero when the damage does not divide the health', () => {
+    let l = freshLife(R);
+    for (let i = 0; i < 2; i++) l = lifeAfterHit(l, 34, `s${i}`, 500);
+    expect(l).toMatchObject({ hp: 32, alive: true });
+    l = lifeAfterHit(l, 34, 's2', 500);
+    expect(l).toMatchObject({ hp: 0, alive: false });
   });
 
   it('respawns only after the timer, then protects briefly', () => {

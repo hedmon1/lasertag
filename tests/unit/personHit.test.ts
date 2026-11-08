@@ -101,4 +101,42 @@ describe('crosshair lock', () => {
     expect(aimedAtPerson(frames, AIM, 1400)).toBe(false);
     expect(aimedAtPerson([frame(990, person(AIM.x + 400, 600, 700))], AIM, 1000)).toBe(false);
   });
+
+  it("only locks when the gun's shot would count: in its hit width and range", () => {
+    const opts = { frameWidth: VW, frameHeight: VH, zoom: 1 };
+    const far = [frame(990, person(AIM.x, 880, 160))]; // about 15 m away
+    expect(aimedAtPerson(far, AIM, 1000, { ...opts, rangeM: 25 })).toBe(true);
+    expect(aimedAtPerson(far, AIM, 1000, { ...opts, rangeM: 12 })).toBe(false);
+    const p = person(AIM.x, 600, 700);
+    const edge = [frame(990, { ...p, x: AIM.x - p.w * 0.05 })]; // crosshair just inside the left edge
+    expect(aimedAtPerson(edge, AIM, 1000, { ...opts, hitWidth: 1.25 })).toBe(true);
+    expect(aimedAtPerson(edge, AIM, 1000, { ...opts, hitWidth: 0.6 })).toBe(false);
+  });
+});
+
+describe('gun hit width and range', () => {
+  const p = person(AIM.x, 600, 700);
+
+  it('a wide gun counts a little beside the body; a precise one needs the middle', () => {
+    const beside = { x: p.x - p.w * 0.08, y: 900 };
+    expect(boxContains(p, beside)).toBe(false);
+    expect(boxContains(p, beside, 1.25)).toBe(true);
+    const offCentre = { x: p.x + p.w * 0.17, y: 900 };
+    expect(boxContains(p, offCentre)).toBe(true);
+    expect(boxContains(p, offCentre, 0.6)).toBe(false);
+  });
+
+  it('misses a person beyond the gun range, and hits them with no range limit', () => {
+    const far = [frame(1000, person(AIM.x, 880, 160))];
+    const d = distanceFromBox(person(AIM.x, 880, 160), VW, VH)!;
+    expect(d).toBeGreaterThan(12);
+    expect(resolveShot(input(far, { rangeM: 12 })).kind).toBe('miss');
+    expect(resolveShot(input(far, { rangeM: null })).kind).toBe('hit');
+    expect(resolveShot(input(far, { rangeM: 25 })).kind).toBe('hit');
+  });
+
+  it('counts a person cut off by the frame edge (too close to measure) for a short-range gun', () => {
+    const close = [frame(1000, person(AIM.x, 0, 1920))];
+    expect(resolveShot(input(close, { rangeM: 12 })).kind).toBe('hit');
+  });
 });

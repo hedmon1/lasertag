@@ -100,7 +100,7 @@ const stinger: GunShape = {
   bore: -0.14,
   muzzle: 1.42,
   ejection: [0.06, 0, 0.6],
-  distance: 1.08,
+  distance: 1.06,
 };
 
 // A burst rifle, short and chunky: pale receiver with magenta panels, a carry-handle sight
@@ -141,7 +141,7 @@ const triplet: GunShape = {
   bore: -0.13,
   muzzle: 1.76,
   ejection: [0.06, 0, 0.5],
-  distance: 1.12,
+  distance: 1.06,
 };
 
 // A heavy revolver: gunmetal frame, a fat pale cylinder with chambers on its face, a long
@@ -206,7 +206,7 @@ const boomstick: GunShape = {
   bore: -0.1,
   muzzle: 1.62,
   ejection: [0.08, -0.05, 0.38],
-  distance: 1.1,
+  distance: 1.06,
 };
 
 // A sniper rifle, chunky: dark purple receiver, a thick barrel with a muzzle brake, a big pale
@@ -216,8 +216,8 @@ const longshot: GunShape = {
     { min: [-0.13, -0.27, -0.1], max: [0.13, 0, 0.9], color: NAVY, decals: [{ face: 'left', u: [0.45, 0.92], v: [0.35, 0.6], color: PURPLE, glow: true }] },
     { min: [-0.115, -0.42, 0.04], max: [0.115, -0.27, 0.95], color: DARK },
     { min: [-0.07, -0.58, 0.5], max: [0.07, -0.42, 0.74], color: DARK },
-    { min: [-0.06, -0.19, 0.9], max: [0.06, -0.07, 1.82], color: DARK, decals: [{ face: 'left', u: [0.1, 0.9], v: [0.4, 0.6], color: NAVY }] },
-    { min: [-0.085, -0.22, 1.82], max: [0.085, -0.04, 1.98], color: PURPLE, decals: vents('left', 2, 0.15, 0.85, [0.3, 0.7]) },
+    { min: [-0.06, -0.19, 0.9], max: [0.06, -0.07, 1.58], color: DARK, decals: [{ face: 'left', u: [0.1, 0.9], v: [0.4, 0.6], color: NAVY }] },
+    { min: [-0.085, -0.22, 1.58], max: [0.085, -0.04, 1.72], color: PURPLE, decals: vents('left', 2, 0.15, 0.85, [0.3, 0.7]) },
     // Scope: mounts, tube, eyepiece with the lens, objective bell.
     { min: [-0.035, 0, 0.22], max: [0.035, 0.05, 0.32], color: DARK },
     { min: [-0.035, 0, 0.62], max: [0.035, 0.05, 0.72], color: DARK },
@@ -234,9 +234,9 @@ const longshot: GunShape = {
   ],
   travel: [0, 0, -0.2],
   bore: -0.13,
-  muzzle: 1.98,
+  muzzle: 1.72,
   ejection: [0.06, 0, 0.3],
-  distance: 1.16,
+  distance: 1.06,
 };
 
 export const SHAPES: Record<GunId, GunShape> = { blip, stinger, triplet, thumper, boomstick, longshot };

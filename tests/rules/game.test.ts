@@ -2,15 +2,16 @@
 // players. Two-player game: Ann (host, seat 0) and Bob (seat 1). Run with `npm run test:rules`.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  INC, RULES, TS, admin, assertFails, assertSucceeds, db, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
+  INC, RULES, TS, admin, assertFails, assertSucceeds, db, gunDoc, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
 } from './harness.ts';
+import { gun } from '../../src/game/guns.ts';
 
 beforeAll(setup);
 afterAll(teardown);
 beforeEach(reset);
 
 const G = 'games/ABCD';
-const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, online: true });
+const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, gun: gunDoc('blip'), online: true });
 
 describe('creating and joining', () => {
   it('lets a signed-in user create a game and take seat 1 (index 0) in one write', async () => {
@@ -26,7 +27,7 @@ describe('creating and joining', () => {
     await assertFails(db(null).ref(`${G}/meta`).set({ host: 'ann', state: 'lobby', createdAt: TS, rules: RULES }));
   });
 
-  it('refuses rules outside the allowed ranges and fixed damage changes', async () => {
+  it('refuses rules outside the allowed ranges, and a damage setting (damage belongs to the guns)', async () => {
     await assertFails(db('ann').ref(`${G}/meta`).set({ host: 'ann', state: 'lobby', createdAt: TS, rules: { ...RULES, damage: 100 } }));
     await assertFails(db('ann').ref(`${G}/meta`).set({ host: 'ann', state: 'lobby', createdAt: TS, rules: { ...RULES, respawnMs: 500 } }));
     await assertFails(db('ann').ref(`${G}/meta`).set({ host: 'ann', state: 'lobby', createdAt: TS, rules: { ...RULES, killLimit: 0 } }));
@@ -165,18 +166,18 @@ describe('shots', () => {
     await assertFails(db('ann').ref(G).update(hitUpdate('bob', 'ann', 's1', life())));
   });
 
-  it('enforces the 350 ms cooldown between hits', async () => {
+  it("enforces the pistol's cooldown between hits", async () => {
     await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life())));
     const after = await read(`${G}/players/bob/life`);
     await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', after)));
-    await sleep(RULES.cooldownMs + 100);
+    await sleep(gun('blip').cooldownMs + 100);
     await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', after)));
     expect(await read(`${G}/players/bob/life/hp`)).toBe(50);
   });
 
   it('refuses a hit built from stale health, so a retried shot can never land twice', async () => {
     await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life())));
-    await sleep(RULES.cooldownMs + 100);
+    await sleep(gun('blip').cooldownMs + 100);
     // Same starting state as the first shot: the sequence number gives it away.
     await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', life())));
     expect(await read(`${G}/players/bob/life/hp`)).toBe(75);
@@ -229,6 +230,70 @@ describe('shots', () => {
     await assertFails(db('ann').ref(`${G}/players/ann/fired`).set(10));
     await assertFails(db('ann').ref(`${G}/players/ann/fired`).set(0));
     await assertFails(db('bob').ref(`${G}/players/ann/fired`).set(INC));
+  });
+});
+
+describe('guns', () => {
+  it('lets you pick any gun in the lobby, and only from the catalog with its own damage and cooldown', async () => {
+    await seedGame('lobby');
+    for (const id of ['stinger', 'triplet', 'thumper', 'boomstick', 'longshot', 'blip'] as const) {
+      await assertSucceeds(db('bob').ref(`${G}/players/bob/gun`).set(gunDoc(id)));
+    }
+    await assertFails(db('bob').ref(`${G}/players/bob/gun`).set({ id: 'railgun', damage: 100, cooldownMs: 0 }));
+    await assertFails(db('bob').ref(`${G}/players/bob/gun`).set({ ...gunDoc('blip'), damage: 100 }));
+    await assertFails(db('bob').ref(`${G}/players/bob/gun`).set({ ...gunDoc('stinger'), cooldownMs: 0 }));
+    await assertFails(db('bob').ref(`${G}/players/bob/gun`).set({ ...gunDoc('blip'), spread: 2 }));
+    await assertFails(db('bob').ref(`${G}/players/bob/gun/damage`).set(80));
+  });
+
+  it("refuses changing your gun mid-game, or anyone else's gun", async () => {
+    await seedGame('live');
+    await assertFails(db('bob').ref(`${G}/players/bob/gun`).set(gunDoc('longshot')));
+    await seedGame('ended');
+    await assertSucceeds(db('bob').ref(`${G}/players/bob/gun`).set(gunDoc('longshot')));
+    await assertFails(db('ann').ref(`${G}/players/bob/gun`).set(gunDoc('blip')));
+  });
+
+  it('refuses joining without a gun', async () => {
+    await admin((d) =>
+      d.ref(G).set({ meta: { host: 'ann', state: 'lobby', createdAt: Date.now(), rules: RULES }, slots: { '0': 'ann' }, players: { ann: player('Ann', 0) } }),
+    );
+    const { gun: _gun, ...noGun } = newPlayer('Bob', 1);
+    await assertFails(db('bob').ref(G).update({ 'players/bob': noGun, 'slots/1': 'bob' }));
+  });
+
+  it("takes the shooter's gun damage: a shotgun takes two hits, and can't claim more or less", async () => {
+    await seedGame('live', { players: { ann: player('Ann', 0, { gun: gunDoc('boomstick') }), bob: player('Bob', 1) } });
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's0', life())));
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { with: 'boomstick' })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(50);
+    await sleep(gun('boomstick').cooldownMs + 100);
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', await read(`${G}/players/bob/life`), { with: 'boomstick' })));
+    expect(await read(`${G}/players/bob/life`)).toMatchObject({ hp: 0, alive: false });
+    expect(await read(`${G}/shots/s2`)).toMatchObject({ gun: 'boomstick', kill: true });
+  });
+
+  it("takes a revolver's 34 down to zero on the third hit, never below", async () => {
+    await seedGame('live', { players: { ann: player('Ann', 0, { gun: gunDoc('thumper') }), bob: player('Bob', 1, { life: life({ hp: 32, seq: 2 }) }) } });
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's3', life({ hp: 32, seq: 2 }), { with: 'thumper' })));
+    expect(await read(`${G}/players/bob/life`)).toMatchObject({ hp: 0, alive: false });
+  });
+
+  it("refuses a shot record that names a gun other than the shooter's", async () => {
+    await seedGame('live');
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { shot: { gun: 'longshot' } })));
+  });
+
+  it("uses the shooter's gun cooldown: an SMG can hit again quickly, a sniper can't", async () => {
+    await seedGame('live', { players: { ann: player('Ann', 0, { gun: gunDoc('stinger') }), bob: player('Bob', 1, { gun: gunDoc('longshot') }) } });
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { with: 'stinger' })));
+    await sleep(gun('stinger').cooldownMs + 40);
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', await read(`${G}/players/bob/life`), { with: 'stinger' })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(74);
+
+    await assertSucceeds(db('bob').ref(G).update(hitUpdate('bob', 'ann', 's3', life(), { with: 'longshot' })));
+    await sleep(300);
+    await assertFails(db('bob').ref(G).update(hitUpdate('bob', 'ann', 's4', await read(`${G}/players/ann/life`), { with: 'longshot' })));
   });
 });
 

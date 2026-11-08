@@ -569,6 +569,7 @@ table.score tr.me td { color: var(--lime); }
   gap: 8px;
   text-decoration: none;
   cursor: pointer;
+  white-space: nowrap;
 }
 .hud-chip svg { width: 16px; height: 16px; flex: none; stroke-width: 2.5; margin-top: -2px; }
 .hp { width: 144px; display: block; cursor: default; }
@@ -871,6 +872,7 @@ table.score tr.me td { color: var(--lime); }
 .display-stage .gun-preview { width: min(320px, 100%); height: auto; filter: drop-shadow(0 10px 0 rgba(5, 4, 15, 0.55)); }
 .gun-preview { display: block; shape-rendering: crispEdges; overflow: visible; }
 .gun-preview.kick { animation: preview-kick 200ms steps(3); }
+.preview-flash { opacity: 0; animation: gun-flash 90ms steps(1, end); }
 @keyframes preview-kick {
   0% { transform: none; }
   30% { transform: translate(-10px, -3px) rotate(-4deg); }
@@ -880,6 +882,7 @@ table.score tr.me td { color: var(--lime); }
 .display-title { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .display-title h1 { color: var(--accent); margin-right: 4px; }
 .display-blurb { font-size: 21px; line-height: 1.2; }
+.display-actions .btn { padding: 14px 10px 12px; font-size: 11px; white-space: nowrap; }
 .stats-list { display: flex; flex-direction: column; gap: 9px; }
 .stat { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 10px; }
 .stat-label { font: 8px/1.3 var(--pixel); letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
@@ -941,5 +944,5 @@ table.score tr.me td { color: var(--lime); }
 .tag.gun-tag svg { width: 10px; height: 10px; stroke-width: 3; margin-top: -1px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .gun *, .gun-preview, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
+  .gun *, .gun-preview, .preview-flash, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
 }

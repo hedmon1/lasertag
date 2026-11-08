@@ -71,9 +71,9 @@ export function Practice() {
           <a className="hud-chip" href="#/"><ArrowLeft />Back</a>
           <a className="hud-chip" href="#/armory?back=practice" aria-label={`Gun: ${g.name}. Change gun`}><Swords />{g.name}</a>
           <div className="spacer" />
-          <button className="hud-chip" onClick={() => { setOverlay(!overlay); save('practice.debug', overlay ? '0' : '1'); }}>
+          <button className="hud-chip" aria-label={overlay ? 'Hide boxes' : 'Show boxes'} aria-pressed={overlay} onClick={() => { setOverlay(!overlay); save('practice.debug', overlay ? '0' : '1'); }}>
             {overlay ? <EyeOff /> : <Eye />}
-            {overlay ? 'Hide boxes' : 'Show boxes'}
+            Boxes
           </button>
         </div>
         <div className="stats">

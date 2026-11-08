@@ -607,16 +607,36 @@ export function audioState(): string {
 }
 
 /** Renders one sound without speakers, for the sound tests and previews. */
-export async function renderSound(name: SoundName, seconds = 2.5, rate = 48000): Promise<AudioBuffer> {
-  const id = name.split(':')[1] as GunId | undefined;
-  if (id) await loadGunSounds([id]);
+export function renderSound(name: SoundName, seconds = 2.5, rate = 48000): Promise<AudioBuffer> {
+  return renderSounds([[name, 0]], seconds, rate);
+}
+
+/** Renders several sounds, each starting `ms` in (automatic fire, a burst), without speakers. */
+export async function renderSounds(list: [SoundName, number][], seconds = 2.5, rate = 48000): Promise<AudioBuffer> {
+  await loadGunSounds(list.map(([n]) => n.split(':')[1] as GunId).filter(Boolean));
   const off = new OfflineAudioContext(2, Math.round(rate * seconds), rate);
-  const saved = chain;
-  chain = buildChain(off, off.destination);
-  try {
-    perform(name);
-  } finally {
-    chain = saved;
+  const offChain = buildChain(off, off.destination);
+  const run = (names: SoundName[]) => {
+    const saved = chain;
+    chain = offChain;
+    try {
+      for (const n of names) perform(n);
+    } finally {
+      chain = saved;
+    }
+  };
+  // Later sounds start by pausing the render at their time (rounded to a render block).
+  const at = new Map<number, SoundName[]>();
+  for (const [name, ms] of list) {
+    const t = Math.round(((ms / 1000) * rate) / 128) * 128;
+    at.set(t, [...(at.get(t) ?? []), name]);
+  }
+  for (const [t, names] of at) {
+    if (t === 0) run(names);
+    else off.suspend(t / rate).then(() => {
+      run(names);
+      return off.resume();
+    });
   }
   return off.startRendering();
 }

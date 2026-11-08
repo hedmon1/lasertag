@@ -9,12 +9,14 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 
-export { assertFails, assertSucceeds };
+import { gun, gunDoc, type GunId } from '../../src/game/guns.ts';
+
+export { assertFails, assertSucceeds, gunDoc };
 
 export const TS = { '.sv': 'timestamp' } as const;
 export const INC = { '.sv': { increment: 1 } } as const;
 
-export const RULES = { hp: 100, damage: 25, cooldownMs: 350, respawnMs: 3000, protectMs: 2000, durationMs: 600000, killLimit: 10 };
+export const RULES = { hp: 100, respawnMs: 3000, protectMs: 2000, durationMs: 600000, killLimit: 10 };
 
 let env: RulesTestEnvironment;
 
@@ -48,8 +50,9 @@ export function life(over: Partial<Record<string, unknown>> = {}) {
   return { hp: 100, alive: true, seq: 0, shot: '', diedAt: 0, spawnAt: 0, ...over };
 }
 
+/** A seeded player, holding the pistol unless `over` says otherwise. */
 export function player(name: string, slot: number, over: Record<string, unknown> = {}) {
-  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, online: true, ...over };
+  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, gun: gunDoc('blip'), online: true, ...over };
 }
 
 /**
@@ -81,13 +84,20 @@ export async function read(path: string): Promise<any> {
   return v;
 }
 
-/** The atomic write a shooter's phone sends for one hit. */
-export function hitUpdate(shooter: string, target: string, shotId: string, targetLife: Record<string, any>, over: { shot?: Record<string, unknown>; life?: Record<string, unknown>; skipLastShot?: boolean } = {}) {
-  const kill = targetLife.hp <= RULES.damage;
+/** The atomic write a shooter's phone sends for one hit with `with` (the pistol by default). */
+export function hitUpdate(
+  shooter: string,
+  target: string,
+  shotId: string,
+  targetLife: Record<string, any>,
+  over: { shot?: Record<string, unknown>; life?: Record<string, unknown>; skipLastShot?: boolean; with?: GunId } = {},
+) {
+  const g = gun(over.with ?? 'blip');
+  const kill = targetLife.hp <= g.damage;
   const update: Record<string, unknown> = {
-    [`shots/${shotId}`]: { by: shooter, target, via: 'ai', dist: 6.5, at: TS, kill, ...over.shot },
+    [`shots/${shotId}`]: { by: shooter, target, via: 'ai', gun: g.id, dist: 6.5, at: TS, kill, ...over.shot },
     [`players/${target}/life`]: {
-      hp: kill ? 0 : targetLife.hp - RULES.damage,
+      hp: kill ? 0 : targetLife.hp - g.damage,
       alive: !kill,
       seq: targetLife.seq + 1,
       shot: shotId,

@@ -1,9 +1,10 @@
 // Renders every game sound offline in Chrome and checks it, then writes WAV files to listen to.
 //
-//   - nothing is silent or clips
-//   - the gunshot is loud on a phone speaker (simulated: nothing below ~350 Hz), the other
-//     player's shot is clearly quieter, the casing pings and reload steps are there
-//   - two gunshots are never identical
+//   - nothing is silent or clips, even a whole magazine of automatic fire
+//   - every gun plays its own recording, and its shot is loud on a phone speaker (simulated:
+//     nothing below ~350 Hz); the other player's shot is clearly quieter but still heard
+//   - each reload finishes inside that gun's reload time, ending on its last step
+//   - two gunshots are never identical, and a gun whose recording fails to load still fires
 //   - audio starts on the first tap anywhere, and sounds asked for while audio is blocked
 //     are dropped instead of all playing at once later
 //
@@ -65,9 +66,10 @@ async function testPage(context, script) {
 }
 
 // Runs in the page: renders a sound, then measures it as is and through a phone speaker.
-async function measure(name) {
+// `windows` are [from, to] seconds to measure on the phone-speaker version.
+async function measure([name, windows]) {
   const m = await import('/src/ui/sound.ts');
-  const buf = await m.renderSound(name);
+  const buf = await m.renderSound(name, 3.4);
   const filtered = async (hz) => {
     const off = new OfflineAudioContext(buf.numberOfChannels, buf.length, buf.sampleRate);
     const src = off.createBufferSource();
@@ -118,15 +120,25 @@ async function measure(name) {
     peak,
     end,
     phoneDb: loudest(phone),
-    bands: {
-      high350to750: db(rms(high, 0.35, 0.75)),
-      phone1400to1550: db(rms(phone, 1.4, 1.55)),
-      phone600to720: db(rms(phone, 0.6, 0.72)),
-      phoneTail: db(rms(phone, 2.2, 2.5)),
-    },
+    high350to750: db(rms(high, 0.35, 0.75)),
+    phoneTail: db(rms(phone, 3.1, 3.4)),
+    windows: (windows ?? []).map(([a, b]) => db(rms(phone, a, b))),
     rate,
     pcm: btoa(bin),
   };
+}
+
+/** Peaks of several renders: the same sound again and again, or a string of rounds. */
+async function peaks(runs) {
+  const m = await import('/src/ui/sound.ts');
+  const out = [];
+  for (const list of runs) {
+    const b = await m.renderSounds(list, 2.5);
+    let p = 0;
+    for (let ch = 0; ch < b.numberOfChannels; ch++) for (const v of b.getChannelData(ch)) p = Math.max(p, Math.abs(v));
+    out.push(p);
+  }
+  return out;
 }
 
 function wav(base64, rate) {
@@ -153,46 +165,63 @@ async function main() {
   try {
     console.log('Rendering');
     const ctx = await browser.newContext();
-    const page = await testPage(ctx, `import * as m from '/src/ui/sound.ts'; window.names = m.SOUND_NAMES; window.ready = true;`);
+    const page = await testPage(ctx, `import * as m from '/src/ui/sound.ts'; import * as g from '/src/game/guns.ts'; window.names = m.SOUND_NAMES; window.guns = g.GUNS; window.m = m; window.ready = true;`);
     const names = await page.evaluate(() => window.names);
+    const guns = await page.evaluate(() => window.guns);
+    // Each reload's last step lands at 76 to 84% of the gun's reload time.
+    const lastStep = (g) => [(g.reloadMs / 1000) * 0.74, (g.reloadMs / 1000) * 0.84];
     const res = {};
     for (const name of names) {
-      const r = await page.evaluate(measure, name);
+      const g = guns.find((x) => name === `reload:${x.id}`);
+      const r = await page.evaluate(measure, [name, g ? [lastStep(g)] : []]);
       res[name] = r;
-      writeFileSync(join(out, `${name}.wav`), wav(r.pcm, r.rate));
-      console.log(`  ${name.padEnd(12)} peak ${r.peak.toFixed(2)}  phone ${r.phoneDb.toFixed(1)} dB  length ${r.end.toFixed(2)} s`);
+      writeFileSync(join(out, `${name.replace(':', '-')}.wav`), wav(r.pcm, r.rate));
+      console.log(`  ${name.padEnd(22)} peak ${r.peak.toFixed(2)}  phone ${r.phoneDb.toFixed(1)} dB  length ${r.end.toFixed(2)} s`);
     }
 
     console.log('Checks');
     for (const name of names) {
       check(res[name].peak > 0.05, `${name} makes a sound`);
       check(res[name].peak <= 1.0001, `${name} does not clip (peak ${res[name].peak.toFixed(3)})`);
-      check(res[name].bands.phoneTail < -60, `${name} has finished by 2.2 s`);
+      check(res[name].phoneTail < -60, `${name} has finished by 3.1 s`);
     }
-    const shot = res.gunshot, far = res.distantShot;
-    check(shot.phoneDb >= -10, `gunshot is loud on a phone speaker (${shot.phoneDb.toFixed(1)} dB)`);
-    check(shot.phoneDb - far.phoneDb >= 5, `the other player's shot is clearly quieter (${(shot.phoneDb - far.phoneDb).toFixed(1)} dB less)`);
-    check(far.phoneDb >= -24, `the other player's shot is still audible (${far.phoneDb.toFixed(1)} dB)`);
-    check(shot.bands.high350to750 > -50, `the shell casing pings after the shot (${shot.bands.high350to750.toFixed(1)} dB above 3 kHz)`);
-    check(res.reload.bands.phone1400to1550 > -40, 'the reload ends with the slide snapping forward');
-    check(res.reload.bands.phone600to720 > -40, 'the reload has the magazine going in');
-    check(res.reload.end <= 1.8, `the reload finishes within the 1.8 s reload (${res.reload.end.toFixed(2)} s)`);
-    const again = await page.evaluate(measure, 'gunshot');
-    check(again.pcm !== shot.pcm, 'two gunshots are not identical');
-    // Every shot is randomised, so one render can pass by luck: check a run of them.
-    const peaks = await page.evaluate(async () => {
-      const m = await import('/src/ui/sound.ts');
-      const out = [];
-      for (let i = 0; i < 20; i++) {
-        const b = await m.renderSound('gunshot', 1.2);
-        let p = 0;
-        for (let ch = 0; ch < b.numberOfChannels; ch++) for (const v of b.getChannelData(ch)) p = Math.max(p, Math.abs(v));
-        out.push(p);
-      }
-      return out;
-    });
-    check(Math.max(...peaks) <= 1.0001, `20 gunshots in a row never clip (highest peak ${Math.max(...peaks).toFixed(3)})`);
+    const ready = await page.evaluate(async (ids) => {
+      await window.m.loadGunSounds(ids);
+      return ids.map((id) => window.m.gunSoundsReady(id));
+    }, guns.map((g) => g.id));
+    check(ready.every(Boolean), `every gun's recording loads (${guns.map((g, i) => `${g.id} ${ready[i] ? 'yes' : 'no'}`).join(', ')})`);
+    for (const g of guns) {
+      const shot = res[`gunshot:${g.id}`], far = res[`distantShot:${g.id}`], rl = res[`reload:${g.id}`];
+      check(shot.phoneDb >= -10, `${g.name}: loud on a phone speaker (${shot.phoneDb.toFixed(1)} dB)`);
+      check(shot.phoneDb - far.phoneDb >= 5, `${g.name}: the other player hears it clearly quieter (${(shot.phoneDb - far.phoneDb).toFixed(1)} dB less)`);
+      check(far.phoneDb >= -24, `${g.name}: the other player still hears it (${far.phoneDb.toFixed(1)} dB)`);
+      check(rl.end <= g.reloadMs / 1000, `${g.name}: the reload finishes within ${(g.reloadMs / 1000).toFixed(1)} s (${rl.end.toFixed(2)} s)`);
+      check(rl.windows[0] > -40, `${g.name}: the reload ends on its last step as the gun comes back up (${rl.windows[0].toFixed(1)} dB)`);
+    }
+    check(res['gunshot:blip'].high350to750 > -50, `the pistol's casing pings after the shot (${res['gunshot:blip'].high350to750.toFixed(1)} dB above 3 kHz)`);
+    const again = await page.evaluate(measure, ['gunshot:blip', []]);
+    check(again.pcm !== res['gunshot:blip'].pcm, 'two gunshots are not identical');
+    // Every shot is randomised, so one render can pass by luck: check runs of them, and a
+    // whole string of automatic fire and a burst, where the shots pile up on each other.
+    const runs = [
+      ...guns.flatMap((g) => Array.from({ length: 6 }, () => [[`gunshot:${g.id}`, 0]])),
+      Array.from({ length: 18 }, (_, i) => ['gunshot:stinger', i * 110]),
+      Array.from({ length: 3 }, (_, i) => ['gunshot:triplet', i * 90]),
+    ];
+    const p = await page.evaluate(peaks, runs);
+    check(Math.max(...p.slice(0, -2)) <= 1.0001, `36 single shots from all six guns never clip (highest peak ${Math.max(...p.slice(0, -2)).toFixed(3)})`);
+    check(p.at(-2) <= 1.0001, `18 rounds of automatic fire never clip (peak ${p.at(-2).toFixed(3)})`);
+    check(p.at(-1) <= 1.0001, `a three-round burst never clips (peak ${p.at(-1).toFixed(3)})`);
     await ctx.close();
+
+    // No recordings (offline, or a file that failed): the synthesized shot stands in.
+    const noFiles = await browser.newContext();
+    await noFiles.route(/\/sounds\/guns\//, (r) => r.fulfill({ status: 404, body: '' }));
+    const page3 = await testPage(noFiles, `import * as m from '/src/ui/sound.ts'; window.m = m; window.ready = true;`);
+    const fallback = await page3.evaluate(measure, ['gunshot:boomstick', []]);
+    const loaded = await page3.evaluate(() => window.m.gunSoundsReady('boomstick'));
+    check(!loaded && fallback.phoneDb >= -10 && fallback.peak <= 1.0001, `a gun whose recording fails to load still fires a loud shot (${fallback.phoneDb.toFixed(1)} dB)`);
+    await noFiles.close();
 
     console.log('Starting audio');
     const touch = await browser.newContext({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 800 } });
@@ -201,8 +230,8 @@ async function main() {
     await tap.touchscreen.tap(195, 400);
     await tap.waitForFunction(() => window.m.audioState() === 'running', null, { timeout: 2000 }).catch(() => {});
     check((await tap.evaluate(() => window.m.audioState())) === 'running', 'a tap anywhere starts audio');
-    await tap.evaluate(() => window.m.sfx.gunshot());
-    check((await tap.evaluate(() => window.__ltSounds.slice())).includes('gunshot'), 'a gunshot plays after the tap');
+    await tap.evaluate(() => window.m.sfx.shot('blip'));
+    check((await tap.evaluate(() => window.__ltSounds.slice())).includes('gunshot:blip'), 'a gunshot plays after the tap');
     await touch.close();
 
     // A phone that blocks audio (no tap yet, or a call in progress): shots fired meanwhile must
@@ -218,7 +247,7 @@ async function main() {
        const m = await import('/src/ui/sound.ts');
        window.m = m;
        m.unlockAudio();
-       setTimeout(() => { m.sfx.gunshot(); m.sfx.gunshot(); window.state = m.audioState(); window.ready = true; }, 700);`,
+       setTimeout(() => { m.sfx.shot('blip'); m.sfx.shot('blip'); window.state = m.audioState(); window.ready = true; }, 700);`,
     );
     const st = await page2.evaluate(() => ({ state: window.state, log: window.__ltSounds.slice() }));
     check(st.state === 'suspended' && st.log.length === 0, `shots fired while audio is blocked are dropped (${st.state}, ${st.log.length} played)`);
@@ -226,7 +255,7 @@ async function main() {
       window.allowAudio = true;
       window.m.unlockAudio();
       for (let i = 0; i < 50 && window.m.audioState() !== 'running'; i++) await new Promise((r) => setTimeout(r, 20));
-      window.m.sfx.gunshot();
+      window.m.sfx.shot('blip');
     });
     check((await page2.evaluate(() => window.__ltSounds.length)) === 1, 'once audio starts again, the next shot plays');
     await blocked.close();
