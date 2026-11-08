@@ -3,6 +3,8 @@ export interface ShotRecord {
   by: string;
   target: string;
   via: 'ai';
+  /** The shooter's gun (GunId); missing on shots from before the Armory. */
+  gun?: string;
   dist: number;
   at: number;
   kill: boolean;

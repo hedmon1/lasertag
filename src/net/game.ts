@@ -4,7 +4,8 @@ import {
   get, increment, onDisconnect, onValue, push, ref, serverTimestamp, set, update, type DatabaseReference,
 } from 'firebase/database';
 import { database, serverNow } from './firebase.ts';
-import { DEFAULT_RULES, freshLife, type GameRules, type Life } from '../game/rules.ts';
+import { DEFAULT_RULES, freshLife, lifeAfterHit, type GameRules, type Life } from '../game/rules.ts';
+import { gunDoc, type GunDoc, type GunId } from '../game/guns.ts';
 import type { ShotRecord } from '../game/score.ts';
 
 export type GameState = 'lobby' | 'live' | 'ended';
@@ -25,6 +26,8 @@ export interface PlayerDoc {
   life: Life;
   fired: number;
   lastShotAt: number;
+  /** Picked in the Armory; locked while a game is live. */
+  gun?: GunDoc;
   online?: boolean;
 }
 
@@ -57,7 +60,7 @@ export function cleanName(name: string): string {
   return name.replace(/\s+/g, ' ').trim().slice(0, 16);
 }
 
-function newPlayer(name: string, rules: GameRules, seat: number) {
+function newPlayer(name: string, rules: GameRules, seat: number, gun: GunId) {
   return {
     name: cleanName(name),
     joinedAt: serverTimestamp(),
@@ -65,12 +68,13 @@ function newPlayer(name: string, rules: GameRules, seat: number) {
     life: freshLife(rules),
     fired: 0,
     lastShotAt: 0,
+    gun: gunDoc(gun),
     online: true,
   };
 }
 
 /** Creates a game with a fresh 4-letter code, joins it as host, and returns the code. */
-export async function createGame(uid: string, name: string): Promise<string> {
+export async function createGame(uid: string, name: string, gun: GunId): Promise<string> {
   for (let attempt = 0; attempt < 8; attempt++) {
     const code = randomCode();
     const existing = await get(gameRef(code, 'meta'));
@@ -80,7 +84,7 @@ export async function createGame(uid: string, name: string): Promise<string> {
     } catch {
       continue; // someone took the code between the check and the write
     }
-    await update(gameRef(code), { [`players/${uid}`]: newPlayer(name, DEFAULT_RULES, 0), 'slots/0': uid });
+    await update(gameRef(code), { [`players/${uid}`]: newPlayer(name, DEFAULT_RULES, 0, gun), 'slots/0': uid });
     return code;
   }
   throw new Error('Could not create a game. Check your connection and try again.');
@@ -91,7 +95,7 @@ export async function readMeta(code: string): Promise<Meta | null> {
   return s.exists() ? (s.val() as Meta) : null;
 }
 
-export async function joinGame(code: string, uid: string, name: string): Promise<void> {
+export async function joinGame(code: string, uid: string, name: string, gun: GunId): Promise<void> {
   const meta = await readMeta(code);
   if (!meta) throw new Error(`No game with code ${code}.`);
   if (meta.state !== 'lobby') throw new Error('That game has already started. Ask the host to start a new round.');
@@ -99,7 +103,7 @@ export async function joinGame(code: string, uid: string, name: string): Promise
   const seat = Array.from({ length: SEATS }, (_, i) => i).find((i) => !seats[i]);
   if (seat === undefined) throw new Error('This game already has 2 players.');
   try {
-    await update(gameRef(code), { [`players/${uid}`]: newPlayer(name, meta.rules, seat), [`slots/${seat}`]: uid });
+    await update(gameRef(code), { [`players/${uid}`]: newPlayer(name, meta.rules, seat, gun), [`slots/${seat}`]: uid });
   } catch {
     throw new Error('Could not join. Someone may have taken the last spot; try again.');
   }
@@ -107,6 +111,11 @@ export async function joinGame(code: string, uid: string, name: string): Promise
 
 export async function renamePlayer(code: string, uid: string, name: string) {
   await set(gameRef(code, `players/${uid}/name`), cleanName(name));
+}
+
+/** Your gun for the next round. The database refuses it while a game is live. */
+export async function setGun(code: string, uid: string, gun: GunId) {
+  await set(gameRef(code, `players/${uid}/gun`), gunDoc(gun));
 }
 
 export async function setRules(code: string, rules: Partial<Pick<GameRules, 'respawnMs' | 'durationMs' | 'killLimit'>>) {
@@ -148,51 +157,60 @@ export type HitResult =
   | { ok: true; shotId: string; kill: boolean }
   | { ok: false; reason: 'down' | 'protected' | 'rejected' };
 
-function hitChanges(me: string, req: HitRequest, life: Life, rules: GameRules, shotId: string) {
-  const kill = life.hp <= rules.damage;
+function hitChanges(me: string, req: HitRequest, life: Life, gun: GunDoc, shotId: string) {
+  const next = lifeAfterHit(life, gun.damage, shotId, Date.now());
   // 0 means unknown; the HUD leaves it out.
   const dist = req.distanceM === null ? 0 : Math.max(0, Math.min(200, Math.round(req.distanceM * 10) / 10)) || 0;
   return {
-    kill,
+    next,
     changes: {
-      [`shots/${shotId}`]: { by: me, target: req.target, via: 'ai', dist, at: serverTimestamp(), kill },
-      [`players/${req.target}/life`]: {
-        hp: kill ? 0 : life.hp - rules.damage,
-        alive: !kill,
-        seq: life.seq + 1,
-        shot: shotId,
-        diedAt: kill ? serverTimestamp() : 0,
-        spawnAt: life.spawnAt,
-      },
+      [`shots/${shotId}`]: { by: me, target: req.target, via: 'ai', gun: gun.id, dist, at: serverTimestamp(), kill: !next.alive },
+      [`players/${req.target}/life`]: { ...next, diedAt: next.alive ? 0 : serverTimestamp() },
       [`players/${me}/lastShotAt`]: serverTimestamp(),
     },
   };
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export type HitSender = (req: HitRequest, known: Life, rules: GameRules, gun: GunDoc) => Promise<HitResult>;
+
 /**
- * Applies a hit. Built from the target's last known life; if someone else hit them in the
- * meantime the database refuses it (stale sequence), so this re-reads once and retries.
+ * Sends your hits, in order. Each hit is built on the target's life after your previous one,
+ * so an automatic gun can have several in flight without waiting for each to come back; they
+ * are spaced by your gun's cooldown so the database accepts every one. If a hit is refused
+ * (the target respawned, or a stale state), this re-reads the target once and retries.
  */
-export async function submitHit(code: string, me: string, req: HitRequest, known: Life, rules: GameRules): Promise<HitResult> {
-  let life = known;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (!life.alive) return { ok: false, reason: 'down' };
-    if (life.spawnAt > 0 && serverNow() < life.spawnAt + rules.protectMs) return { ok: false, reason: 'protected' };
-    const shotId = push(gameRef(code, 'shots')).key!;
-    const { kill, changes } = hitChanges(me, req, life, rules, shotId);
-    try {
-      await update(gameRef(code), changes);
-      return { ok: true, shotId, kill };
-    } catch {
-      const fresh = await get(gameRef(code, `players/${req.target}/life`));
-      if (!fresh.exists()) return { ok: false, reason: 'rejected' };
-      const next = fresh.val() as Life;
-      // Same state as before: refused for another reason (cooldown, game just ended).
-      if (next.seq === life.seq) return { ok: false, reason: 'rejected' };
-      life = next;
+export function hitSender(code: string, me: string): HitSender {
+  let pending: Life | null = null;
+  let lastSent = -Infinity;
+  return async (req, known, rules, gun) => {
+    for (let wait = lastSent + gun.cooldownMs + 30 - performance.now(); wait > 0; wait = lastSent + gun.cooldownMs + 30 - performance.now()) {
+      await sleep(wait);
     }
-  }
-  return { ok: false, reason: life.alive ? 'rejected' : 'down' };
+    let life = pending && pending.seq >= known.seq ? pending : known;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!life.alive) return { ok: false, reason: 'down' };
+      if (life.spawnAt > 0 && serverNow() < life.spawnAt + rules.protectMs) return { ok: false, reason: 'protected' };
+      const shotId = push(gameRef(code, 'shots')).key!;
+      const { next, changes } = hitChanges(me, req, life, gun, shotId);
+      pending = next;
+      lastSent = performance.now();
+      try {
+        await update(gameRef(code), changes);
+        return { ok: true, shotId, kill: !next.alive };
+      } catch {
+        pending = null;
+        const fresh = await get(gameRef(code, `players/${req.target}/life`));
+        if (!fresh.exists()) return { ok: false, reason: 'rejected' };
+        const now = fresh.val() as Life;
+        // Same state as before: refused for another reason (cooldown, game just ended).
+        if (now.seq === life.seq) return { ok: false, reason: 'rejected' };
+        life = now;
+      }
+    }
+    return { ok: false, reason: life.alive ? 'rejected' : 'down' };
+  };
 }
 
 export async function countTrigger(code: string, me: string) {
