@@ -6,6 +6,7 @@ import { serverNow } from '../net/firebase.ts';
 import { leaderKills, scoreboard } from '../game/score.ts';
 import { go } from '../ui/router.ts';
 import { load, save } from '../ui/storage.ts';
+import { savedGun } from '../ui/loadout.ts';
 import { Lobby } from './Lobby.tsx';
 import { Live } from './Live.tsx';
 import { Scoreboard } from './Scoreboard.tsx';
@@ -88,7 +89,7 @@ function JoinPanel({ code, g }: { code: string; g: GameView }) {
           setError(null);
           save('name', name.trim());
           try {
-            await joinGame(code, g.uid!, name);
+            await joinGame(code, g.uid!, name, savedGun());
             g.refresh();
           } catch (e) {
             setError((e as Error).message);

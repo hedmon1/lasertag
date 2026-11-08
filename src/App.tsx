@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { useRoute } from './ui/router.ts';
 import { Home } from './screens/Home.tsx';
+import { Armory } from './screens/Armory.tsx';
 import { isGameCode, normalizeCode } from './net/game.ts';
 
 // Camera screens pull in the AI runtime; load them only when needed.
@@ -14,6 +15,7 @@ export function App() {
   let screen = <Home />;
   if (first === 'g' && second && isGameCode(normalizeCode(second))) screen = <GameRoute code={normalizeCode(second)} />;
   else if (first === 'practice') screen = <Practice />;
+  else if (first === 'armory') screen = <Armory />;
   else if (first === 'range') screen = <RangeTest />;
   return (
     <>

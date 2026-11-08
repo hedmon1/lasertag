@@ -851,6 +851,95 @@ table.score tr.me td { color: var(--lime); }
 }
 .stats b { color: var(--cyan); font-weight: 400; }
 
+/* ---------- the armory ---------- */
+/* Each gun brings its accent colour as --accent. */
+.display { background: var(--panel); border: 4px solid var(--ink); box-shadow: var(--sh); }
+.display-stage {
+  position: relative;
+  overflow: hidden;
+  height: 168px;
+  display: grid;
+  place-items: center;
+  border-bottom: 4px solid var(--ink);
+  background:
+    linear-gradient(to bottom, transparent 62%, color-mix(in srgb, var(--accent) 22%, transparent) 62% 63%, transparent 63%),
+    repeating-linear-gradient(90deg, transparent 0 31px, rgba(38, 224, 255, 0.12) 31px 32px),
+    radial-gradient(ellipse 70% 60% at 50% 55%, color-mix(in srgb, var(--accent) 18%, #0d0b24), #07061a 75%);
+}
+/* Scanlines over the case, like the cabinet screen. */
+.display-stage::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(to bottom, transparent 0 2px, rgba(0, 0, 0, 0.3) 2px 3px); }
+.display-stage .gun-preview { width: min(320px, 100%); height: auto; filter: drop-shadow(0 10px 0 rgba(5, 4, 15, 0.55)); }
+.gun-preview { display: block; shape-rendering: crispEdges; overflow: visible; }
+.gun-preview.kick { animation: preview-kick 200ms steps(3); }
+@keyframes preview-kick {
+  0% { transform: none; }
+  30% { transform: translate(-10px, -3px) rotate(-4deg); }
+  100% { transform: none; }
+}
+.display-body { padding: 16px 14px; display: flex; flex-direction: column; gap: 14px; }
+.display-title { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.display-title h1 { color: var(--accent); margin-right: 4px; }
+.display-blurb { font-size: 21px; line-height: 1.2; }
+.stats-list { display: flex; flex-direction: column; gap: 9px; }
+.stat { display: grid; grid-template-columns: 92px 1fr auto; align-items: center; gap: 10px; }
+.stat-label { font: 8px/1.3 var(--pixel); letter-spacing: 0.04em; text-transform: uppercase; color: var(--faint); }
+.stat-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; height: 14px; }
+.stat-bar i { display: block; background: var(--panel-2); border: 2px solid var(--ink); }
+.stat-bar i.on { background: var(--accent); }
+.stat-value { font: 19px/1 var(--term); min-width: 78px; text-align: right; }
+.gun-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.gun-tile {
+  appearance: none;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px 10px 12px;
+  background: var(--panel);
+  color: var(--text);
+  border: 4px solid var(--ink);
+  border-radius: 0;
+  box-shadow: var(--sh-sm);
+  cursor: pointer;
+  text-align: left;
+  touch-action: manipulation;
+  transition: transform 80ms, box-shadow 80ms;
+}
+.gun-tile .gun-preview { width: 100%; height: auto; margin-bottom: 2px; }
+.gun-tile:active { transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
+.gun-tile.on { background: var(--panel-2); outline: 3px solid var(--accent); outline-offset: -7px; }
+.gun-tile-name { font: 10px/1.3 var(--pixel); text-transform: uppercase; color: var(--accent); }
+.gun-tile-kind { font: 18px/1 var(--term); color: var(--muted); }
+.gun-tile-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font: 7px/1 var(--pixel);
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--cyan);
+  border: 2px solid var(--ink);
+  padding: 3px 4px 2px;
+}
+/* The equipped gun on the home screen and in the lobby. */
+.loadout {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  background: #0d0b24;
+  border: 3px solid var(--ink);
+  box-shadow: inset 0 0 0 2px #24204a;
+  color: var(--text);
+  text-decoration: none;
+}
+.loadout .gun-preview { width: 132px; height: auto; flex: none; }
+.loadout-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.loadout-name { font: 12px/1.3 var(--pixel); text-transform: uppercase; color: var(--accent); }
+.tag.gun-tag { display: inline-flex; align-items: center; gap: 5px; background: var(--accent); }
+.tag.gun-tag svg { width: 10px; height: 10px; stroke-width: 3; margin-top: -1px; }
+
 @media (prefers-reduced-motion: reduce) {
-  .gun *, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
+  .gun *, .gun-preview, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
 }

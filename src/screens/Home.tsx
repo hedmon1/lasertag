@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { BookOpen, Crosshair, Eye, Footprints, Gamepad2, LogIn, Plus, Ruler, Target, UserRound, Users, Wrench } from 'lucide-react';
+import { useState, type CSSProperties } from 'react';
+import { BookOpen, Crosshair, Eye, Footprints, Gamepad2, LogIn, Plus, Ruler, Swords, Target, UserRound, Users, Wrench } from 'lucide-react';
 import { cleanName, createGame, isGameCode, joinGame, normalizeCode, readMeta } from '../net/game.ts';
 import { useUid } from '../net/useGame.ts';
 import { usingEmulators } from '../net/firebase.ts';
@@ -7,9 +7,12 @@ import { go } from '../ui/router.ts';
 import { load, save } from '../ui/storage.ts';
 import { Panel } from '../ui/Panel.tsx';
 import { AttractScene, ControlDeck } from '../ui/Arcade.tsx';
+import { GunPreview } from '../ui/GunPreview.tsx';
+import { savedGun } from '../ui/loadout.ts';
+import { GUNS, gun as gunById, hitsToEliminate } from '../game/guns.ts';
 
 /** The scrolling marquee under the cabinet: the rules at a glance. */
-const TICKER = ['4 hits to eliminate', '12 shots a magazine', 'Hold scope to zoom', 'Respawn in seconds', 'Only you two in view'];
+const TICKER = [`${GUNS.length} guns in the armory`, 'Hold scope to zoom', 'Respawn in seconds', 'Only you two in view'];
 
 export function Home() {
   const { uid, error: authError } = useUid();
@@ -17,6 +20,7 @@ export function Home() {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState<'create' | 'join' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [equipped] = useState(() => gunById(savedGun()));
 
   const nameOk = cleanName(name).length > 0;
 
@@ -26,7 +30,7 @@ export function Home() {
     setError(null);
     save('name', cleanName(name));
     try {
-      go(`g/${await createGame(uid, name)}`);
+      go(`g/${await createGame(uid, name, equipped.id)}`);
     } catch (e) {
       setError((e as Error).message);
       setBusy(null);
@@ -43,7 +47,7 @@ export function Home() {
       const meta = await readMeta(c);
       if (!meta) throw new Error(`No game with code ${c}.`);
       try {
-        await joinGame(c, uid, name);
+        await joinGame(c, uid, name, equipped.id);
       } catch (e) {
         // Already in this game (for example after a reload): just go back in.
         if (meta.state === 'lobby') throw e;
@@ -120,11 +124,22 @@ export function Home() {
 
       {(error || authError) && <div className="error">{error ?? authError}</div>}
 
+      <Panel title="Armory" tone="cyan" icon={<Swords />}>
+        <a className="loadout" href="#/armory" style={{ '--accent': equipped.color } as CSSProperties}>
+          <GunPreview id={equipped.id} w={150} h={66} />
+          <span className="loadout-text">
+            <span className="loadout-name">{equipped.name}</span>
+            <span className="small muted">{equipped.kind} · {hitsToEliminate(equipped)} hits to eliminate</span>
+          </span>
+        </a>
+        <a className="btn btn-cyan btn-block" href="#/armory"><Swords />Change gun</a>
+      </Panel>
+
       <Panel title="How to play" tone="yellow" icon={<BookOpen />}>
         <ol className="steps">
           <li><span className="step-icon"><Users /></span>One player creates a game. The other joins with its 4-letter code.</li>
           <li><span className="step-icon"><Footprints /></span>Spread out. Hold your phone like a blaster, with the camera facing away from you.</li>
-          <li><span className="step-icon"><Crosshair /></span>Put the crosshair on the other player and press Fire. The AI checks that the crosshair is on a person. Four hits and they are out for a few seconds.</li>
+          <li><span className="step-icon"><Crosshair /></span>Put the crosshair on the other player and press Fire. The AI checks that the crosshair is on a person. Enough hits and they are out for a few seconds: four with the pistol, two with the shotgun.</li>
           <li><span className="step-icon"><Eye /></span>Play where only the two of you are in view: anyone under the crosshair counts as a hit.</li>
         </ol>
       </Panel>
