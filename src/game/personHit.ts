@@ -147,6 +147,12 @@ export function resolveFlash(input: FlashInput): ShotOutcome {
   return { kind: 'hit', box: best, distanceM: distanceFromBox(best, input.frameWidth, input.frameHeight, input.zoom), head: false };
 }
 
+/**
+ * A grenade's blast catches people the same way, at the moment it goes off: anyone in view
+ * within its reach (`throwTime` is the blast time here). The thrower can't aim it, only throw it.
+ */
+export const resolveBlast = resolveFlash;
+
 export interface AimOptions {
   hitWidth?: number;
   rangeM?: number | null;

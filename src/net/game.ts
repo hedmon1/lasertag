@@ -29,6 +29,10 @@ export interface PlayerDoc {
   lastShotAt: number;
   /** Server time of your last flashbang throw, 0 if none; missing in games from before flashbangs. */
   lastFlashAt?: number;
+  /** Server time of your last grenade throw, 0 if none; the other phone hears it coming. */
+  lastGrenadeAt?: number;
+  /** The throw (its lastGrenadeAt) that already hit someone. */
+  grenadeHitOf?: number;
   /** Picked in the Armory; locked while a game is live. */
   gun?: GunDoc;
   online?: boolean;
@@ -82,6 +86,7 @@ function newPlayer(name: string, rules: GameRules, seat: number, gun: GunId) {
     fired: 0,
     lastShotAt: 0,
     lastFlashAt: 0,
+    lastGrenadeAt: 0,
     gun: gunDoc(gun),
     online: true,
   };

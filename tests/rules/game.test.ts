@@ -2,17 +2,18 @@
 // players. Two-player game: Ann (host, seat 0) and Bob (seat 1). Run with `npm run test:rules`.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  INC, RULES, TS, admin, assertFails, assertSucceeds, db, flashUpdate, gunDoc, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
+  INC, RULES, TS, admin, assertFails, assertSucceeds, db, flashUpdate, grenadeHit, gunDoc, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
 } from './harness.ts';
 import { gun } from '../../src/game/guns.ts';
 import { FLASH } from '../../src/game/flash.ts';
+import { GRENADE } from '../../src/game/grenade.ts';
 
 beforeAll(setup);
 afterAll(teardown);
 beforeEach(reset);
 
 const G = 'games/ABCD';
-const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, gun: gunDoc('blip'), online: true });
+const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, lastGrenadeAt: 0, gun: gunDoc('blip'), online: true });
 
 describe('creating and joining', () => {
   it('lets a signed-in user create a game and take seat 1 (index 0) in one write', async () => {
@@ -336,6 +337,103 @@ describe('headshots', () => {
     const now = await read(`${G}/players/bob/life`);
     await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', now, { head: true })));
     expect(await read(`${G}/players/bob/life/alive`)).toBe(false);
+  });
+});
+
+describe('grenades', () => {
+  beforeEach(() => seedGame('live'));
+  /** Ann threw `agoMs` ago (the database sees it as a throw at that time). */
+  const thrown = async (agoMs: number) => {
+    const at = Date.now() - agoMs;
+    await admin((d) => d.ref(`${G}/players/ann/lastGrenadeAt`).set(at));
+    return at;
+  };
+
+  it('lets you throw in a live game, which starts the recharge', async () => {
+    await assertSucceeds(db('ann').ref(`${G}/players/ann/lastGrenadeAt`).set(TS));
+    await assertFails(db('ann').ref(`${G}/players/ann/lastGrenadeAt`).set(TS));
+    await assertFails(db('ann').ref(`${G}/players/bob/lastGrenadeAt`).set(TS));
+    await admin((d) => d.ref(`${G}/players/ann/lastGrenadeAt`).set(Date.now() - GRENADE.cooldownMs - 200));
+    await assertSucceeds(db('ann').ref(`${G}/players/ann/lastGrenadeAt`).set(TS));
+  });
+
+  it('refuses a throw outside a live game, or a made-up time', async () => {
+    await assertFails(db('ann').ref(`${G}/players/ann/lastGrenadeAt`).set(Date.now() - 60000));
+    await admin((d) => d.ref(`${G}/meta/state`).set('ended'));
+    await assertFails(db('ann').ref(`${G}/players/ann/lastGrenadeAt`).set(TS));
+  });
+
+  it(`takes ${GRENADE.near.damage} up close and ${GRENADE.far.damage} further out, and nothing past ${GRENADE.far.m} m`, async () => {
+    const at = await thrown(1600);
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { dist: 3.5 })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(100 - GRENADE.near.damage);
+    await seedGame('live');
+    const at2 = await thrown(1600);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g2', life(), at2, { dist: 9, damage: GRENADE.near.damage })));
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g2', life(), at2, { dist: 9 })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(100 - GRENADE.far.damage);
+    await seedGame('live');
+    const at3 = await thrown(1600);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g3', life(), at3, { dist: GRENADE.far.m + 1 })));
+  });
+
+  it('counts "too close to measure" (distance 0) as up close', async () => {
+    const at = await thrown(1600);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { dist: 0, damage: GRENADE.far.damage })));
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { dist: 0 })));
+  });
+
+  it('refuses a blast before the fuse has burned, or long after the throw, or with no throw', async () => {
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), 0)));
+    const early = await thrown(300);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), early)));
+    const late = await thrown(GRENADE.hitWindowMs.to + 1500);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), late)));
+  });
+
+  it('lets one throw hit only once, and only with the throw marked as used', async () => {
+    const at = await thrown(1600);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { skipMark: true })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at - 5000)));
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at)));
+    const now = await read(`${G}/players/bob/life`);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g2', now, at)));
+  });
+
+  it("never claims a headshot, another gun's damage, or a hit on yourself", async () => {
+    const at = await thrown(1600);
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { shot: { head: true } })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { shot: { gun: 'blip' } })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'ann', 'g1', life(), at)));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at, { shot: { via: 'rocket' } })));
+  });
+
+  it('refuses a blast on a player who is down or spawn-protected, or from a downed thrower', async () => {
+    const at = await thrown(1600);
+    await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ seq: 3, spawnAt: Date.now() })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life({ seq: 3, spawnAt: Date.now() }), at)));
+    await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ hp: 0, alive: false, seq: 4, shot: 's4', diedAt: Date.now() })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life({ hp: 0, alive: false, seq: 4 }), at)));
+    await seedGame('live');
+    const at2 = await thrown(1600);
+    await admin((d) => d.ref(`${G}/players/ann/life`).set(life({ hp: 0, alive: false, seq: 2, shot: 's2', diedAt: Date.now() })));
+    await assertFails(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life(), at2)));
+  });
+
+  it("leaves the gun's cooldown alone: a grenade and a shot can land together", async () => {
+    const at = await thrown(1600);
+    await db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life()));
+    const now = await read(`${G}/players/bob/life`);
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', now, at)));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(100 - 25 - GRENADE.near.damage);
+  });
+
+  it('kills a player low on health and flags the kill', async () => {
+    const at = await thrown(1600);
+    await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ hp: 50, seq: 2 })));
+    await assertSucceeds(db('ann').ref(G).update(grenadeHit('ann', 'bob', 'g1', life({ hp: 50, seq: 2 }), at)));
+    expect(await read(`${G}/players/bob/life`)).toMatchObject({ hp: 0, alive: false });
+    expect(await read(`${G}/shots/g1/kill`)).toBe(true);
   });
 });
 

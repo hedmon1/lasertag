@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GUNS } from '../src/game/guns.ts';
 import { FLASH } from '../src/game/flash.ts';
+import { GRENADE } from '../src/game/grenade.ts';
 
 const FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'database.rules.json');
 
@@ -67,6 +68,16 @@ const takes = (damage) =>
     paren(and(`data.child('hp').val() > ${damage}`, `newData.child('hp').val() == data.child('hp').val() - ${damage}`, "newData.child('alive').val() == true", "newData.child('diedAt').val() == 0")),
     paren(and(`data.child('hp').val() <= ${damage}`, "newData.child('hp').val() == 0", "newData.child('alive').val() == false", "newData.child('diedAt').val() == now")),
   );
+/** What the new shot record says. */
+const shotSays = (field) => `${newShot}.child('${field}').val()`;
+// A gun shot takes the shooter's gun damage, doubled on the head. A grenade takes its damage
+// by distance; its range is checked on the shot record.
+const damageTaken = or(
+  paren(and(`${shotSays('via')} != 'grenade'`, `${shotSays('head')} != true`, paren(takes(`${myGun}.child('damage').val()`)))),
+  paren(and(`${shotSays('via')} != 'grenade'`, `${shotSays('head')} == true`, paren(takes(`${myGun}.child('damage').val() * 2`)))),
+  paren(and(`${shotSays('via')} == 'grenade'`, `${shotSays('dist')} <= ${GRENADE.near.m}`, paren(takes(GRENADE.near.damage)))),
+  paren(and(`${shotSays('via')} == 'grenade'`, `${shotSays('dist')} > ${GRENADE.near.m}`, paren(takes(GRENADE.far.damage)))),
+);
 const hit = and(
   '(auth.uid != $uid)',
   "newData.child('shot').val() != data.child('shot').val()",
@@ -76,12 +87,7 @@ const hit = and(
   "data.child('alive').val() == true",
   "newData.child('seq').val() == data.child('seq').val() + 1",
   "newData.child('spawnAt').val() == data.child('spawnAt').val()",
-  paren(
-    or(
-      paren(and(`${newShot}.child('head').val() != true`, paren(takes(`${myGun}.child('damage').val()`)))),
-      paren(and(`${newShot}.child('head').val() == true`, paren(takes(`${myGun}.child('damage').val() * 2`)))),
-    ),
-  ),
+  paren(damageTaken),
 );
 const respawn = and(
   'auth.uid == $uid',
@@ -108,14 +114,33 @@ const reset = and(
 
 // ---------- shots and flashbangs ----------
 
+// A gun shot: your gun's cooldown has passed, and the write stamps the next one.
+const byGun = and(
+  "newData.child('via').val() == 'ai'",
+  `newData.child('gun').val() == ${myGun}.child('id').val()`,
+  `now >= ${me}.child('lastShotAt').val() + ${myGun}.child('cooldownMs').val()`,
+  stamps('lastShotAt'),
+);
+// A grenade's blast: in the window after your last throw, in reach, never a headshot, and the
+// write marks that throw as used, so one throw can only hit once.
+const lastThrow = `${me}.child('lastGrenadeAt').val()`;
+const byGrenade = and(
+  "newData.child('via').val() == 'grenade'",
+  "newData.child('gun').val() == 'grenade'",
+  "newData.child('head').val() != true",
+  `${me}.child('lastGrenadeAt').exists()`,
+  `now >= ${lastThrow} + ${GRENADE.hitWindowMs.from}`,
+  `now <= ${lastThrow} + ${GRENADE.hitWindowMs.to}`,
+  `newData.child('dist').val() <= ${GRENADE.far.m}`,
+  `newData.parent().parent().child('players').child(auth.uid).child('grenadeHitOf').val() == ${lastThrow}`,
+);
 const shotValidate = and(
   "newData.hasChildren(['by', 'target', 'via', 'gun', 'dist', 'at', 'kill'])",
   inWindow,
   "newData.child('target').val() != auth.uid",
   `${me}.child('slot').val() >= 0`,
   `${me}.child('life').child('alive').val() == true`,
-  `now >= ${me}.child('lastShotAt').val() + ${myGun}.child('cooldownMs').val()`,
-  stamps('lastShotAt'),
+  paren(or(paren(byGun), paren(byGrenade))),
   `${newTarget('target')}.child('slot').val() >= 0`,
   `${newTarget('target')}.child('life').child('alive').val() == true`,
   `now >= ${newTarget('target')}.child('life').child('spawnAt').val() + ${rule('protectMs')}`,
@@ -200,6 +225,16 @@ export const RULES = {
             },
             lastShotAt: stampField,
             lastFlashAt: stampField,
+            // A throw, in a live game, once the last one has recharged.
+            lastGrenadeAt: {
+              '.write': 'auth != null && auth.uid == $uid',
+              '.validate': `newData.isNumber() && ((newData.val() == 0 && !data.exists()) || (newData.val() == now && ${state} == 'live' && (!data.exists() || now >= data.val() + ${GRENADE.cooldownMs})))`,
+            },
+            // The throw that has already hit someone; set by the hit itself.
+            grenadeHitOf: {
+              '.write': 'auth != null && auth.uid == $uid',
+              '.validate': "newData.isNumber() && newData.val() != data.val() && newData.val() == data.parent().child('lastGrenadeAt').val()",
+            },
             gun: {
               '.write': `auth != null && auth.uid == $uid && ${state} != 'live'`,
               '.validate': `newData.hasChildren(['id', 'damage', 'cooldownMs']) && (${gunTable})`,
@@ -231,8 +266,8 @@ export const RULES = {
             '.validate': shotValidate,
             by: typed('isString'),
             target: typed('isString'),
-            via: { '.validate': "newData.val() == 'ai'" },
-            gun: { '.validate': `newData.val() == ${myGun}.child('id').val()` },
+            via: { '.validate': "newData.val() == 'ai' || newData.val() == 'grenade'" },
+            gun: typed('isString'),
             dist: { '.validate': 'newData.isNumber() && newData.val() >= 0 && newData.val() <= 200' },
             at: { '.validate': 'newData.val() == now' },
             kill: typed('isBoolean'),

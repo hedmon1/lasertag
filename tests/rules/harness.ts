@@ -53,7 +53,7 @@ export function life(over: Partial<Record<string, unknown>> = {}) {
 
 /** A seeded player, holding the pistol unless `over` says otherwise. */
 export function player(name: string, slot: number, over: Record<string, unknown> = {}) {
-  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, gun: gunDoc('blip'), online: true, ...over };
+  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, lastGrenadeAt: 0, gun: gunDoc('blip'), online: true, ...over };
 }
 
 /**
@@ -119,6 +119,36 @@ export function hitUpdate(
 export function flashUpdate(thrower: string, target: string, id: string, over: { flash?: Record<string, unknown>; skipStamp?: boolean } = {}) {
   const update: Record<string, unknown> = { [`flashes/${id}`]: { by: thrower, target, dist: 6.5, at: TS, ...over.flash } };
   if (!over.skipStamp) update[`players/${thrower}/lastFlashAt`] = TS;
+  return update;
+}
+
+/**
+ * The write a thrower's phone sends when their grenade (thrown at `thrownAt`) catches the
+ * other player `dist` metres away. `damage` overrides what the life loses, to test refusals.
+ */
+export function grenadeHit(
+  thrower: string,
+  target: string,
+  shotId: string,
+  targetLife: Record<string, any>,
+  thrownAt: number,
+  over: { dist?: number; damage?: number; shot?: Record<string, unknown>; skipMark?: boolean } = {},
+) {
+  const dist = over.dist ?? 3.5;
+  const damage = over.damage ?? (dist <= 5 ? 60 : 35);
+  const kill = targetLife.hp <= damage;
+  const update: Record<string, unknown> = {
+    [`shots/${shotId}`]: { by: thrower, target, via: 'grenade', gun: 'grenade', dist, at: TS, kill, ...over.shot },
+    [`players/${target}/life`]: {
+      hp: kill ? 0 : targetLife.hp - damage,
+      alive: !kill,
+      seq: targetLife.seq + 1,
+      shot: shotId,
+      diedAt: kill ? TS : 0,
+      spawnAt: targetLife.spawnAt,
+    },
+  };
+  if (!over.skipMark) update[`players/${thrower}/grenadeHitOf`] = thrownAt;
   return update;
 }
 
