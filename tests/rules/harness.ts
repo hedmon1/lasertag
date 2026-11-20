@@ -10,6 +10,7 @@ import {
 } from '@firebase/rules-unit-testing';
 
 import { gun, gunDoc, type GunId } from '../../src/game/guns.ts';
+import { shotDamage } from '../../src/game/rules.ts';
 
 export { assertFails, assertSucceeds, gunDoc };
 
@@ -84,20 +85,24 @@ export async function read(path: string): Promise<any> {
   return v;
 }
 
-/** The atomic write a shooter's phone sends for one hit with `with` (the pistol by default). */
+/**
+ * The atomic write a shooter's phone sends for one hit with `with` (the pistol by default), on
+ * the head when `head` is set. `damage` overrides what the life loses, to test refusals.
+ */
 export function hitUpdate(
   shooter: string,
   target: string,
   shotId: string,
   targetLife: Record<string, any>,
-  over: { shot?: Record<string, unknown>; life?: Record<string, unknown>; skipLastShot?: boolean; with?: GunId } = {},
+  over: { shot?: Record<string, unknown>; life?: Record<string, unknown>; skipLastShot?: boolean; with?: GunId; head?: boolean; damage?: number } = {},
 ) {
   const g = gun(over.with ?? 'blip');
-  const kill = targetLife.hp <= g.damage;
+  const damage = over.damage ?? shotDamage(g, !!over.head);
+  const kill = targetLife.hp <= damage;
   const update: Record<string, unknown> = {
-    [`shots/${shotId}`]: { by: shooter, target, via: 'ai', gun: g.id, dist: 6.5, at: TS, kill, ...over.shot },
+    [`shots/${shotId}`]: { by: shooter, target, via: 'ai', gun: g.id, dist: 6.5, at: TS, kill, ...(over.head ? { head: true } : {}), ...over.shot },
     [`players/${target}/life`]: {
-      hp: kill ? 0 : targetLife.hp - g.damage,
+      hp: kill ? 0 : targetLife.hp - damage,
       alive: !kill,
       seq: targetLife.seq + 1,
       shot: shotId,

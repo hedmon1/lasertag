@@ -1,8 +1,8 @@
 // The flashbang. Throw it with the other player anywhere in view (the crosshair doesn't need
 // to be on them) and their screen goes white, their ears ring and every sound goes muffled
 // until it wears off. It does no damage. One flashbang, recharged 20 s after each throw,
-// hit or miss. database.rules.json enforces the recharge and the range (tests/unit/flash.test.ts
-// checks the two agree).
+// hit or miss. database.rules.json enforces the recharge and the range (scripts/build-rules.mjs
+// writes these numbers into it).
 
 export const FLASH = {
   /** Time between throws. */

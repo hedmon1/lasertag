@@ -103,7 +103,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     setMarker({ key: Date.now(), kill: false });
     sfx.impact();
     buzz(30);
-    const r = await sendHit({ target: opponentId, distanceM: o.distanceM }, target.life, rules, gunDoc(myGun.id));
+    const r = await sendHit({ target: opponentId, distanceM: o.distanceM, head: o.head }, target.life, rules, gunDoc(myGun.id));
     if (r.ok && r.kill) {
       setMarker({ key: Date.now(), kill: true });
       sfx.kill();

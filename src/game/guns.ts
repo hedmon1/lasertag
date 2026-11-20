@@ -1,6 +1,6 @@
 // The guns you can pick in the Armory. Damage and the time between hits are enforced by
-// the database rules (database.rules.json, checked against this table by
-// tests/unit/guns.test.ts); everything else is how the gun feels in your hands.
+// the database rules (database.rules.json, built from this table by scripts/build-rules.mjs);
+// everything else is how the gun feels in your hands.
 
 export type GunId = 'blip' | 'stinger' | 'triplet' | 'thumper' | 'boomstick' | 'longshot';
 

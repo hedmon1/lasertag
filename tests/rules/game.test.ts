@@ -302,6 +302,43 @@ describe('guns', () => {
   });
 });
 
+describe('headshots', () => {
+  beforeEach(() => seedGame('live'));
+
+  it('takes double the gun damage for a headshot', async () => {
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { head: true })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(50);
+    expect(await read(`${G}/shots/s1/head`)).toBe(true);
+  });
+
+  it('refuses a headshot claim with body damage, and double damage without the claim', async () => {
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { head: true, damage: 25 })));
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { damage: 50 })));
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { head: true, damage: 100 })));
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { shot: { head: 'yes' } })));
+  });
+
+  it('treats head: false as a body hit', async () => {
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { shot: { head: false } })));
+    expect(await read(`${G}/players/bob/life/hp`)).toBe(75);
+  });
+
+  it('makes a sniper headshot a one-hit kill, flagged as the kill', async () => {
+    await admin((d) => d.ref(`${G}/players/ann/gun`).set(gunDoc('longshot')));
+    await assertFails(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { with: 'longshot', head: true, shot: { kill: false } })));
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { with: 'longshot', head: true })));
+    expect(await read(`${G}/players/bob/life`)).toMatchObject({ hp: 0, alive: false });
+  });
+
+  it('takes a pistol player out in two headshots', async () => {
+    await db('ann').ref(G).update(hitUpdate('ann', 'bob', 's1', life(), { head: true }));
+    await sleep(300); // past the pistol's 250 ms between hits
+    const now = await read(`${G}/players/bob/life`);
+    await assertSucceeds(db('ann').ref(G).update(hitUpdate('ann', 'bob', 's2', now, { head: true })));
+    expect(await read(`${G}/players/bob/life/alive`)).toBe(false);
+  });
+});
+
 describe('flashbangs', () => {
   beforeEach(() => seedGame('live'));
 

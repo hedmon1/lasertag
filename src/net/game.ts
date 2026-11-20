@@ -4,7 +4,7 @@ import {
   get, increment, onDisconnect, onValue, push, ref, serverTimestamp, set, update, type DatabaseReference,
 } from 'firebase/database';
 import { database, serverNow } from './firebase.ts';
-import { DEFAULT_RULES, freshLife, lifeAfterHit, type GameRules, type Life } from '../game/rules.ts';
+import { DEFAULT_RULES, freshLife, lifeAfterHit, shotDamage, type GameRules, type Life } from '../game/rules.ts';
 import { gunDoc, type GunDoc, type GunId } from '../game/guns.ts';
 import { FLASH } from '../game/flash.ts';
 import type { ShotRecord } from '../game/score.ts';
@@ -165,6 +165,8 @@ export interface HitRequest {
   target: string;
   /** Estimated distance, or null when the person was cut off by the frame edge. */
   distanceM: number | null;
+  /** On the head: double damage. */
+  head?: boolean;
 }
 
 export type HitResult =
@@ -172,13 +174,13 @@ export type HitResult =
   | { ok: false; reason: 'down' | 'protected' | 'rejected' };
 
 function hitChanges(me: string, req: HitRequest, life: Life, gun: GunDoc, shotId: string) {
-  const next = lifeAfterHit(life, gun.damage, shotId, Date.now());
+  const next = lifeAfterHit(life, shotDamage(gun, !!req.head), shotId, Date.now());
   // 0 means unknown; the HUD leaves it out.
   const dist = req.distanceM === null ? 0 : Math.max(0, Math.min(200, Math.round(req.distanceM * 10) / 10)) || 0;
   return {
     next,
     changes: {
-      [`shots/${shotId}`]: { by: me, target: req.target, via: 'ai', gun: gun.id, dist, at: serverTimestamp(), kill: !next.alive },
+      [`shots/${shotId}`]: { by: me, target: req.target, via: 'ai', gun: gun.id, dist, at: serverTimestamp(), kill: !next.alive, ...(req.head ? { head: true } : {}) },
       [`players/${req.target}/life`]: { ...next, diedAt: next.alive ? 0 : serverTimestamp() },
       [`players/${me}/lastShotAt`]: serverTimestamp(),
     },

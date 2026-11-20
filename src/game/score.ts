@@ -8,6 +8,8 @@ export interface ShotRecord {
   dist: number;
   at: number;
   kill: boolean;
+  /** A headshot (double damage); missing on body hits. */
+  head?: boolean;
 }
 
 export interface ScoreRow {
