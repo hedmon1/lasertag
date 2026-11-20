@@ -41,6 +41,22 @@ export function boxContains(b: PersonBox, p: Pt, hitWidth = HIT_WIDTH): boolean 
   return p.x >= a.x && p.x <= a.x + a.w && p.y >= b.y && p.y <= b.y + b.h;
 }
 
+/**
+ * The head: the top of a standing person's box, and narrower than the shoulders. A gun's
+ * spread doesn't widen it, so a headshot always takes aim.
+ */
+export const HEAD = { top: 0.16, width: 0.5 };
+
+export function headArea(b: PersonBox): PersonBox {
+  const inset = (b.w * (1 - HEAD.width)) / 2;
+  return { ...b, x: b.x + inset, w: b.w - 2 * inset, h: b.h * HEAD.top };
+}
+
+export function headContains(b: PersonBox, p: Pt): boolean {
+  const a = headArea(b);
+  return p.x >= a.x && p.x <= a.x + a.w && p.y >= a.y && p.y <= a.y + a.h;
+}
+
 /** Focal length in pixels; the camera's field of view spans the frame's long side. */
 export function focalPx(longSide: number, zoom = 1): number {
   return (longSide / (2 * Math.tan(((MAIN_CAMERA_FOV_DEG / 2) * Math.PI) / 180))) * zoom;
@@ -70,7 +86,8 @@ export interface ShotInput {
   rangeM?: number | null;
 }
 
-export type ShotOutcome = { kind: 'hit'; box: PersonBox; distanceM: number | null } | { kind: 'miss' };
+/** `head`: the crosshair was on the head (double damage). Never set for a flashbang. */
+export type ShotOutcome = { kind: 'hit'; box: PersonBox; distanceM: number | null; head: boolean } | { kind: 'miss' };
 
 /** Out of range: the gun has a range and the person is known to be beyond it. */
 function outOfRange(b: PersonBox, vw: number, vh: number, zoom: number, rangeM: number | null | undefined): boolean {
@@ -82,7 +99,7 @@ function outOfRange(b: PersonBox, vw: number, vh: number, zoom: number, rangeM: 
 /**
  * A hit if a person was under the crosshair in any frame from 150 ms before the press to
  * 120 ms after it (lag forgiveness), and within the gun's range. The frame nearest the press
- * supplies the distance.
+ * supplies the distance, and says whether it was a headshot.
  */
 export function resolveShot(input: ShotInput): ShotOutcome {
   let best: { box: PersonBox; dt: number } | null = null;
@@ -96,7 +113,12 @@ export function resolveShot(input: ShotInput): ShotOutcome {
   }
   if (!best) return { kind: 'miss' };
   if (outOfRange(best.box, input.frameWidth, input.frameHeight, input.zoom, input.rangeM)) return { kind: 'miss' };
-  return { kind: 'hit', box: best.box, distanceM: distanceFromBox(best.box, input.frameWidth, input.frameHeight, input.zoom) };
+  return {
+    kind: 'hit',
+    box: best.box,
+    distanceM: distanceFromBox(best.box, input.frameWidth, input.frameHeight, input.zoom),
+    head: headContains(best.box, input.aim),
+  };
 }
 
 export interface FlashInput {
@@ -122,7 +144,7 @@ export function resolveFlash(input: FlashInput): ShotOutcome {
     }
   }
   if (!best) return { kind: 'miss' };
-  return { kind: 'hit', box: best, distanceM: distanceFromBox(best, input.frameWidth, input.frameHeight, input.zoom) };
+  return { kind: 'hit', box: best, distanceM: distanceFromBox(best, input.frameWidth, input.frameHeight, input.zoom), head: false };
 }
 
 export interface AimOptions {
@@ -133,13 +155,21 @@ export interface AimOptions {
   zoom: number;
 }
 
-/** Whether a shot would count right now, for the crosshair lock. */
-export function aimedAtPerson(frames: PeopleFrame[], aim: Pt, now: number, o?: AimOptions, maxAgeMs = 250): boolean {
-  return frames.some(
-    (f) =>
-      now - f.time <= maxAgeMs &&
-      f.boxes.some((b) => boxContains(b, aim, o?.hitWidth) && !(o && outOfRange(b, o.frameWidth, o.frameHeight, o.zoom, o.rangeM))),
-  );
+/** What the crosshair is on right now: a head, a body, or nothing a shot would count on. */
+export type AimLock = 'head' | 'body' | false;
+
+/** Whether a shot would count right now, and on the head, for the crosshair lock. */
+export function aimedAtPerson(frames: PeopleFrame[], aim: Pt, now: number, o?: AimOptions, maxAgeMs = 250): AimLock {
+  let lock: AimLock = false;
+  for (const f of frames) {
+    if (now - f.time > maxAgeMs) continue;
+    for (const b of f.boxes) {
+      if (!boxContains(b, aim, o?.hitWidth) || (o && outOfRange(b, o.frameWidth, o.frameHeight, o.zoom, o.rangeM))) continue;
+      if (headContains(b, aim)) return 'head';
+      lock = 'body';
+    }
+  }
+  return lock;
 }
 
 /** Whether a flashbang would catch someone right now: a person anywhere in view, in range. */

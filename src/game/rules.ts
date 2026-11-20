@@ -42,6 +42,11 @@ export function freshLife(rules: GameRules, prevSeq?: number): Life {
   return { hp: rules.hp, alive: true, seq: prevSeq === undefined ? 0 : prevSeq + 1, shot: '', diedAt: 0, spawnAt: 0 };
 }
 
+/** What one shot takes: the gun's damage, doubled for a headshot. */
+export function shotDamage(gun: { damage: number }, head: boolean): number {
+  return head ? gun.damage * 2 : gun.damage;
+}
+
 /** The life after one hit for `damage`. `diedAt` is the caller's timestamp (the database uses its own clock). */
 export function lifeAfterHit(life: Life, damage: number, shotId: string, diedAt: number): Life {
   const kill = life.hp <= damage;

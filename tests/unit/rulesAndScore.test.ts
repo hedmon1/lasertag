@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_RULES, canRespawn, freshLife, isProtected, lifeAfterHit, respawnAt } from '../../src/game/rules.ts';
+import { DEFAULT_RULES, canRespawn, freshLife, isProtected, lifeAfterHit, respawnAt, shotDamage } from '../../src/game/rules.ts';
+import { gun } from '../../src/game/guns.ts';
 import { killFeed, scoreboard, type ShotRecord } from '../../src/game/score.ts';
 
 describe('life and rules', () => {
@@ -65,5 +66,27 @@ describe('scoreboard', () => {
 
   it('lists kills newest first', () => {
     expect(killFeed([...shots, shot('7', 'c', 'a', true, 9)]).map((s) => s.id)).toEqual(['7', '4']);
+  });
+});
+
+describe('headshot damage', () => {
+  it('doubles the gun damage on the head', () => {
+    expect(shotDamage(gun('blip'), false)).toBe(25);
+    expect(shotDamage(gun('blip'), true)).toBe(50);
+    expect(shotDamage(gun('longshot'), true)).toBe(160);
+  });
+
+  it('takes the hits to eliminate down: pistol 2, revolver 2, shotgun 1, sniper 1', () => {
+    const hitsToKill = (id: Parameters<typeof gun>[0]) => {
+      let life = freshLife(DEFAULT_RULES), n = 0;
+      while (life.alive) life = lifeAfterHit(life, shotDamage(gun(id), true), `s${++n}`, 1);
+      return n;
+    };
+    expect(['blip', 'thumper', 'boomstick', 'longshot'].map((id) => hitsToKill(id as Parameters<typeof gun>[0]))).toEqual([2, 2, 1, 1]);
+  });
+
+  it('never takes health below zero', () => {
+    const life = lifeAfterHit(freshLife(DEFAULT_RULES), shotDamage(gun('longshot'), true), 's1', 5);
+    expect(life).toMatchObject({ hp: 0, alive: false, diedAt: 5 });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HIT_WIDTH, aimedAtPerson, boxContains, distanceFromBox, focalPx, hitArea, resolveShot,
+  HEAD, HIT_WIDTH, aimedAtPerson, boxContains, distanceFromBox, focalPx, headArea, hitArea, resolveShot,
   type PeopleFrame, type PersonBox, type ShotInput,
 } from '../../src/game/personHit.ts';
 import { PERSON_HEIGHT_M } from '../../src/game/constants.ts';
@@ -97,7 +97,7 @@ describe('distance', () => {
 describe('crosshair lock', () => {
   it('locks while a recent frame has a person under the crosshair', () => {
     const frames = [frame(990, person(AIM.x, 600, 700))];
-    expect(aimedAtPerson(frames, AIM, 1000)).toBe(true);
+    expect(aimedAtPerson(frames, AIM, 1000)).toBe('body');
     expect(aimedAtPerson(frames, AIM, 1400)).toBe(false);
     expect(aimedAtPerson([frame(990, person(AIM.x + 400, 600, 700))], AIM, 1000)).toBe(false);
   });
@@ -105,11 +105,11 @@ describe('crosshair lock', () => {
   it("only locks when the gun's shot would count: in its hit width and range", () => {
     const opts = { frameWidth: VW, frameHeight: VH, zoom: 1 };
     const far = [frame(990, person(AIM.x, 880, 160))]; // about 15 m away
-    expect(aimedAtPerson(far, AIM, 1000, { ...opts, rangeM: 25 })).toBe(true);
+    expect(aimedAtPerson(far, AIM, 1000, { ...opts, rangeM: 25 })).toBe('body');
     expect(aimedAtPerson(far, AIM, 1000, { ...opts, rangeM: 12 })).toBe(false);
     const p = person(AIM.x, 600, 700);
     const edge = [frame(990, { ...p, x: AIM.x - p.w * 0.05 })]; // crosshair just inside the left edge
-    expect(aimedAtPerson(edge, AIM, 1000, { ...opts, hitWidth: 1.25 })).toBe(true);
+    expect(aimedAtPerson(edge, AIM, 1000, { ...opts, hitWidth: 1.25 })).toBe('body');
     expect(aimedAtPerson(edge, AIM, 1000, { ...opts, hitWidth: 0.6 })).toBe(false);
   });
 });
@@ -138,5 +138,49 @@ describe('gun hit width and range', () => {
   it('counts a person cut off by the frame edge (too close to measure) for a short-range gun', () => {
     const close = [frame(1000, person(AIM.x, 0, 1920))];
     expect(resolveShot(input(close, { rangeM: 12 })).kind).toBe('hit');
+  });
+});
+
+describe('headshots', () => {
+  // The crosshair (AIM) sits 40 px below the top of this person's box: on the head.
+  const headAt = (time: number, dx = 0) => frame(time, person(AIM.x + dx, AIM.y - 40, 700));
+
+  it('counts the top of the box as the head, and the chest as the body', () => {
+    expect(resolveShot(input([headAt(1000)]))).toMatchObject({ kind: 'hit', head: true });
+    expect(resolveShot(input([frame(1000, person(AIM.x, 600, 700))]))).toMatchObject({ kind: 'hit', head: false });
+  });
+
+  it('makes the head the top 16% of the box and half its width', () => {
+    const p = person(AIM.x, 500, 900);
+    const h = headArea(p);
+    expect(h.y).toBe(p.y);
+    expect(h.h).toBeCloseTo(p.h * HEAD.top);
+    expect(h.w).toBeCloseTo(p.w * HEAD.width);
+    expect(h.x + h.w / 2).toBeCloseTo(p.x + p.w / 2);
+  });
+
+  it("is narrower than the body: beside the head is a body hit, and a shotgun's spread doesn't widen it", () => {
+    const p = person(AIM.x, AIM.y - 40, 700);
+    const beside = (p.w * HEAD.width) / 2 + p.w * 0.1; // past the head, still inside the hit area
+    expect(resolveShot(input([frame(1000, { ...p, x: p.x - beside })]))).toMatchObject({ kind: 'hit', head: false });
+    expect(resolveShot(input([frame(1000, { ...p, x: p.x - beside })], { hitWidth: 1.25 }))).toMatchObject({ kind: 'hit', head: false });
+  });
+
+  it('reads the head from the frame nearest the press, in the same lag window', () => {
+    const body = frame(880, person(AIM.x, 600, 700));
+    expect(resolveShot(input([body, headAt(1010)]))).toMatchObject({ head: true });
+    expect(resolveShot(input([headAt(880), frame(1010, person(AIM.x, 600, 700))]))).toMatchObject({ head: false });
+    expect(resolveShot(input([headAt(800)])).kind).toBe('miss');
+  });
+
+  it('locks the crosshair on HEAD when it is on the head of a recent frame', () => {
+    expect(aimedAtPerson([headAt(990)], AIM, 1000)).toBe('head');
+    expect(aimedAtPerson([headAt(990)], AIM, 1400)).toBe(false);
+  });
+
+  it('respects the gun range for headshots too', () => {
+    const far = frame(1000, person(AIM.x, AIM.y - 5, 160)); // about 15 m, crosshair on the head
+    expect(resolveShot(input([far], { rangeM: 12 })).kind).toBe('miss');
+    expect(resolveShot(input([far], { rangeM: null }))).toMatchObject({ kind: 'hit', head: true });
   });
 });

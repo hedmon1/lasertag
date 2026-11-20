@@ -43,7 +43,7 @@ export function Practice() {
     if (!rig) return;
     const id = setInterval(() => {
       const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
-      setLocked(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setLocked(!!aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
       setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
