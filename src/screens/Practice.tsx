@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, Crosshair as CrosshairIcon, Eye, EyeOff, RotateCcw, RotateCw, Swords, ZoomIn } from 'lucide-react';
 import { peopleAI } from '../detect/people.ts';
 import { fire, throwFlash } from '../game/fire.ts';
-import { aimedAtPerson, personInView } from '../game/personHit.ts';
+import { aimedAtPerson, personInView, type AimLock } from '../game/personHit.ts';
 import { FLASH } from '../game/flash.ts';
 import { gun as gunById } from '../game/guns.ts';
 import { CameraView, useCameraRig, useScope } from '../ui/CameraView.tsx';
-import { Crosshair, HitMarker, useDetectorState } from '../ui/hud.tsx';
+import { AimTag, Crosshair, HitMarker, useDetectorState } from '../ui/hud.tsx';
 import { loadGunSounds, sfx } from '../ui/sound.ts';
 import { Gun } from '../ui/Gun.tsx';
 import { load, save } from '../ui/storage.ts';
@@ -27,10 +27,10 @@ export function Practice() {
   const scope = useScope(rig, g.scope);
   const detector = useDetectorState();
   const [overlay, setOverlay] = useState(() => load('practice.debug', '1') === '1');
-  const [locked, setLocked] = useState(false);
+  const [lock, setLock] = useState<AimLock>(false);
   const [inView, setInView] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
-  const [marker, setMarker] = useState<number | null>(null);
+  const [marker, setMarker] = useState<{ key: number; head: boolean } | null>(null);
   const [hits, setHits] = useState({ hits: 0, shots: 0 });
 
   useEffect(() => keepAwake(), []);
@@ -43,7 +43,7 @@ export function Practice() {
     if (!rig) return;
     const id = setInterval(() => {
       const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
-      setLocked(!!aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setLock(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
       setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
@@ -57,13 +57,14 @@ export function Practice() {
       const d = o.kind === 'hit' && o.distanceM ? ` · ${o.distanceM.toFixed(1)} m` : '';
       if (o.kind === 'hit') {
         sfx.impact();
-        setMarker(Date.now());
+        if (o.head) sfx.headshot();
+        setMarker({ key: Date.now(), head: o.head });
       } else {
         sfx.ricochet();
       }
       setHits((h) => ({ hits: h.hits + (o.kind === 'hit' ? 1 : 0), shots: h.shots + 1 }));
       const conf = o.kind === 'hit' ? ` · ${Math.round(o.box.score * 100)}% sure` : '';
-      setLog((l) => [{ key: performance.now(), text: `${o.kind === 'hit' ? 'HIT' : 'MISS'}${d}${conf}` }, ...l].slice(0, 5));
+      setLog((l) => [{ key: performance.now(), text: `${o.kind === 'hit' ? (o.head ? 'HEADSHOT' : 'HIT') : 'MISS'}${d}${conf}` }, ...l].slice(0, 5));
     },
   });
   useSpaceTrigger(weapon);
@@ -75,7 +76,7 @@ export function Practice() {
       if (!rig) return;
       const thrownAt = performance.now();
       const o = await throwFlash({ pipeline: rig.pipeline, video: rig.video, frameZoom: scope.frameZoom });
-      if (o.kind === 'hit') setTimeout(() => setMarker(Date.now()), Math.max(0, FLASH.flightMs - (performance.now() - thrownAt)));
+      if (o.kind === 'hit') setTimeout(() => setMarker({ key: Date.now(), head: false }), Math.max(0, FLASH.flightMs - (performance.now() - thrownAt)));
       const d = o.kind === 'hit' && o.distanceM ? ` · ${o.distanceM.toFixed(1)} m` : '';
       setLog((l) => [{ key: performance.now(), text: o.kind === 'hit' ? `FLASH CAUGHT${d}` : 'FLASH MISSED' }, ...l].slice(0, 5));
     },
@@ -99,9 +100,9 @@ export function Practice() {
           </div>
           {log.length === 0 ? <div className="muted">Aim at a person and fire, or throw a flashbang. Results appear here.</div> : log.map((l) => <div key={l.key}>{l.text}</div>)}
         </div>
-        <Crosshair locked={locked} />
-        {locked && <div className="aim-name">Person</div>}
-        {marker && <HitMarker key={`marker-${marker}`} kill={false} />}
+        <Crosshair lock={lock} />
+        <AimTag lock={lock} name="Person" />
+        {marker && <HitMarker key={`marker-${marker.key}`} kill={false} head={marker.head} />}
         {flash.throws > 0 && <ThrownFlashbang key={flash.throws} />}
         <Gun gun={g.id} shots={weapon.shots} reloading={weapon.reloading} empty={weapon.ammo === 0} />
         <div className="hud-bottom">

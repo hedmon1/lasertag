@@ -7,7 +7,7 @@ import { serverNow } from '../net/firebase.ts';
 import { keepAwake } from '../camera/camera.ts';
 import { peopleAI } from '../detect/people.ts';
 import { fire, throwFlash, type FireResult } from '../game/fire.ts';
-import { aimedAtPerson, personInView } from '../game/personHit.ts';
+import { aimedAtPerson, personInView, type AimLock } from '../game/personHit.ts';
 import { FLASH, FLASH_TOTAL_MS } from '../game/flash.ts';
 import { canRespawn, isProtected, respawnAt, type Life } from '../game/rules.ts';
 import { gun as gunById, gunDoc } from '../game/guns.ts';
@@ -18,7 +18,7 @@ import { Gun } from '../ui/Gun.tsx';
 import { useSpaceTrigger, useWeapon } from '../ui/useWeapon.ts';
 import { load, save } from '../ui/storage.ts';
 import { go } from '../ui/router.ts';
-import { Crosshair, HitMarker, useDetectorState, formatClock } from '../ui/hud.tsx';
+import { AimTag, Crosshair, HitMarker, useDetectorState, formatClock } from '../ui/hud.tsx';
 import { FlashButton, ThrownFlashbang, Whiteout, useFlashbang } from '../ui/flashbang.tsx';
 
 export function Live({ code, g }: { code: string; g: GameView }) {
@@ -48,9 +48,9 @@ export function Live({ code, g }: { code: string; g: GameView }) {
 
   const [overlay, setOverlay] = useState(() => load('debug') === '1');
   const [menu, setMenu] = useState(false);
-  const [locked, setLocked] = useState(false);
+  const [lock, setLock] = useState<AimLock>(false);
   const [inView, setInView] = useState(false);
-  const [marker, setMarker] = useState<{ key: number; kill: boolean } | null>(null);
+  const [marker, setMarker] = useState<{ key: number; kill: boolean; head?: boolean } | null>(null);
   const [flashKey, setFlashKey] = useState(0);
   const [hurt, setHurt] = useState<{ shotId: string; key: number } | null>(null);
 
@@ -80,7 +80,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     if (!rig) return;
     const id = setInterval(() => {
       const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
-      setLocked(!!aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: myGun.hitWidth, rangeM: myGun.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setLock(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: myGun.hitWidth, rangeM: myGun.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
       setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
@@ -100,12 +100,13 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     // The hit marker is the only feedback, so it only shows for a hit that counts: none for a
     // player who is down or just respawned.
     if (!target.life.alive || isProtected(target.life, rules, serverNow())) return;
-    setMarker({ key: Date.now(), kill: false });
+    setMarker({ key: Date.now(), kill: false, head: o.head });
     sfx.impact();
-    buzz(30);
+    if (o.head) sfx.headshot();
+    buzz(o.head ? [20, 20, 30] : 30);
     const r = await sendHit({ target: opponentId, distanceM: o.distanceM, head: o.head }, target.life, rules, gunDoc(myGun.id));
     if (r.ok && r.kill) {
-      setMarker({ key: Date.now(), kill: true });
+      setMarker({ key: Date.now(), kill: true, head: o.head });
       sfx.kill();
       const jpg = res.killcam();
       if (jpg) sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
@@ -191,6 +192,21 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   }, [opponentId, oppFlashAt]);
 
   // ---------- being hit ----------
+  // The shot record and the health change arrive separately; give the record a moment, so a
+  // headshot sounds like one.
+  const shotsNow = useRef(g.shots);
+  shotsNow.current = g.shots;
+  function hurtSound(shotId: string) {
+    const play = (head: boolean) => {
+      if (head) sfx.hurtHead();
+      else sfx.hurt();
+      buzz(head ? [60, 30, 120] : 90);
+    };
+    const known = shotsNow.current.find((s) => s.id === shotId);
+    if (known) play(!!known.head);
+    else setTimeout(() => play(!!shotsNow.current.find((s) => s.id === shotId)?.head), 150);
+  }
+
   const prevLife = useRef<Life | null>(null);
   useEffect(() => {
     const l = me?.life;
@@ -202,8 +218,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
       setFlashKey((k) => k + 1);
       setHurt({ shotId: l.shot, key: Date.now() });
       if (l.alive) {
-        sfx.hurt();
-        buzz(90);
+        hurtSound(l.shot);
       } else {
         sfx.eliminated();
         buzz([220, 80, 220]);
@@ -250,7 +265,8 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   const killer = deathShotRec ? players.current[deathShotRec.by]?.name : undefined;
   const killerGun = deathShotRec?.gun ? gunById(deathShotRec.gun).name : null;
   const away = deathShotRec && deathShotRec.dist > 0 ? `about ${Math.round(deathShotRec.dist)} m away` : '';
-  const deathLine = killerGun ? [killerGun, away].filter(Boolean).join(', ') : away.replace(/^a/, 'A');
+  const how = killerGun ? `${killerGun}${deathShotRec?.head ? ' headshot' : ''}` : deathShotRec?.head ? 'Headshot' : '';
+  const deathLine = how ? [how, away].filter(Boolean).join(', ') : away.replace(/^a/, 'A');
 
   return (
     <CameraView videoRef={videoRef} rig={rig} viewZoom={scope.viewZoom} frameZoom={scope.frameZoom} overlay={overlay}>
@@ -280,12 +296,12 @@ export function Live({ code, g }: { code: string; g: GameView }) {
           ))}
         </div>
 
-        <Crosshair locked={locked} />
-        {locked && opponentName && <div className="aim-name">{opponentName}</div>}
-        {marker && <HitMarker key={`marker-${marker.key}`} kill={marker.kill} />}
+        <Crosshair lock={lock} />
+        {opponentName && <AimTag lock={lock} name={opponentName} />}
+        {marker && <HitMarker key={`marker-${marker.key}`} kill={marker.kill} head={marker.head} />}
         {showHurt && (
           <div className="toast bad" style={{ top: 'calc(96px + var(--safe-top))' }}>
-            Hit by {hurtBy}{hurtGun ? `'s ${hurtGun}` : ''}{hurtShot!.dist > 0 ? `. ${Math.round(hurtShot!.dist)} m` : ''}
+            {hurtShot!.head ? 'Headshot by' : 'Hit by'} {hurtBy}{hurtGun ? `'s ${hurtGun}` : ''}{hurtShot!.dist > 0 ? `. ${Math.round(hurtShot!.dist)} m` : ''}
           </div>
         )}
 

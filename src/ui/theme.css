@@ -607,6 +607,7 @@ table.score tr.me td { color: var(--lime); }
   color: var(--paper);
 }
 .crosshair.locked { color: var(--lime); }
+.crosshair.head { color: var(--yellow); }
 .crosshair svg { width: 100%; height: 100%; overflow: visible; }
 .aim-name {
   position: absolute;
@@ -623,6 +624,8 @@ table.score tr.me td { color: var(--lime); }
   white-space: nowrap;
   pointer-events: none;
 }
+.aim-name.head { background: var(--yellow); }
+.aim-name b { font-weight: 400; }
 .hitmarker {
   position: absolute;
   left: 50%;

@@ -5,6 +5,7 @@
 //     nothing below ~350 Hz); the other player's shot is clearly quieter but still heard
 //   - each reload finishes inside that gun's reload time, ending on its last step
 //   - two gunshots are never identical, and a gun whose recording fails to load still fires
+//   - a headshot pings on top of the impact, and hits the victim harder
 //   - a flashbang that catches you is the loudest thing in the game, your ears ring, and
 //     everything else is muffled until the white fades; a thrown one bangs as it lands
 //   - audio starts on the first tap anywhere, and sounds asked for while audio is blocked
@@ -252,6 +253,10 @@ async function main() {
       check(rl.end <= g.reloadMs / 1000, `${g.name}: the reload finishes within ${(g.reloadMs / 1000).toFixed(1)} s (${rl.end.toFixed(2)} s)`);
       check(rl.windows[0] > -40, `${g.name}: the reload ends on its last step as the gun comes back up (${rl.windows[0].toFixed(1)} dB)`);
     }
+    console.log('Headshots');
+    check(res.headshot.phoneDb > -24 && res.headshot.high350to750 < -60, `the headshot ping carries on a phone speaker and is short (${res.headshot.phoneDb.toFixed(1)} dB)`);
+    check(res.hurtHead.phoneDb >= res.hurt.phoneDb - 1, `a headshot hits the victim at least as hard as a body hit (${res.hurtHead.phoneDb.toFixed(1)} vs ${res.hurt.phoneDb.toFixed(1)} dB)`);
+
     console.log('Flashbangs');
     const loudestShot = Math.max(...guns.map((g) => res[`gunshot:${g.id}`].phoneDb));
     check(res.flashed.phoneDb >= loudestShot - 1, `being caught by a flashbang is as loud as the loudest gunshot (${res.flashed.phoneDb.toFixed(1)} dB, loudest shot ${loudestShot.toFixed(1)} dB)`);

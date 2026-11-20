@@ -545,6 +545,13 @@ const synth = {
     tone({ type: 'sine', from: 190, to: 70, ms: 70, gain: 0.5, delay: 45 });
     tone({ type: 'triangle', from: 2400, to: 2300, ms: 45, gain: 0.22, delay: 35 });
   },
+  /** A headshot, on top of the impact: a sharp ping off a helmet, ringing briefly. */
+  headshot() {
+    noise({ ms: 25, gain: 0.55, type: 'highpass', from: 3500, delay: 40, attackMs: 0.5 });
+    for (const [f, gain, ms] of [[2850, 0.17, 280], [4420, 0.1, 210], [6130, 0.06, 150]]) {
+      tone({ type: 'sine', from: vary(f, 0.03), to: f * 0.99, ms, gain, delay: 40, attackMs: 1 });
+    }
+  },
   /** The final hit: a heavier impact and a confirm tone. */
   kill() {
     noise({ ms: 160, gain: 0.95, type: 'lowpass', from: 1500, to: 140, delay: 45, reverb: 0.3 });
@@ -582,6 +589,13 @@ const synth = {
     noise({ ms: 170, gain: 0.7, type: 'lowpass', from: 900, to: 160 });
     tone({ type: 'triangle', from: 230, to: 80, ms: 200, gain: 0.45 });
     tone({ type: 'sine', from: 110, to: 38, ms: 260, gain: 0.8 });
+  },
+  /** Hit in the head (victim hears it): a harder knock and a short ring in the ears. */
+  hurtHead() {
+    noise({ ms: 40, gain: 0.8, type: 'bandpass', from: 1800, q: 1.2, attackMs: 0.5 });
+    noise({ ms: 200, gain: 0.8, type: 'lowpass', from: 1100, to: 150 });
+    tone({ type: 'sine', from: 120, to: 36, ms: 300, gain: 0.9 });
+    tone({ type: 'sine', from: 2600, to: 2560, ms: 450, gain: 0.05, delay: 30, attackMs: 20 });
   },
   eliminated() {
     noise({ ms: 420, gain: 0.6, type: 'lowpass', from: 1000, to: 90, reverb: 0.6 });
@@ -653,6 +667,8 @@ export const sfx = {
   kill: () => play('kill'),
   empty: () => play('empty'),
   hurt: () => play('hurt'),
+  hurtHead: () => play('hurtHead'),
+  headshot: () => play('headshot'),
   eliminated: () => play('eliminated'),
   respawn: () => play('respawn'),
   countdown: () => play('countdown'),
