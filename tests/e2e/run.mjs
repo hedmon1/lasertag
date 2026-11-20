@@ -3,7 +3,8 @@
 //   Ann hosts. Her camera films a person (a magenta stand-in; see make-video.mjs).
 //   Bob joins, and picks the shotgun in the Armory. His camera films an empty room. A third
 //   player is turned away.
-//   Bob fires and misses. Ann fires her pistol four times: Bob sees each hit, then the
+//   Bob fires and misses. Bob throws a flashbang at an empty room; Ann throws one and Bob's
+//   screen goes white until it wears off. Ann fires her pistol four times: Bob sees each hit, then the
 //   elimination screen with a kill cam, then respawns. Ann ends the game and both see the
 //   scoreboard. In a second round Ann takes the SMG and holds Fire until Bob is out.
 //
@@ -153,6 +154,41 @@ async function main() {
       () => check(true, "Ann hears Bob's shotgun from across the field"),
       () => check(false, "Ann hears Bob's shotgun from across the field"),
     );
+    console.log('Flashbang');
+    // Bob throws one at an empty room: it bangs somewhere, nobody is caught, and it recharges.
+    await B.getByTestId('flash').dispatchEvent('pointerdown');
+    await A.waitForFunction(() => window.__ltSounds.includes('flashBang'), null, { timeout: 5000 }).then(
+      () => check(true, "Ann hears Bob's flashbang go off somewhere else"),
+      () => check(false, "Ann hears Bob's flashbang go off somewhere else"),
+    );
+    check((await A.getByTestId('flashed').count()) === 0, "Bob's flashbang catches nobody: Ann's screen stays clear");
+    const bobFlash = B.getByTestId('flash');
+    const charging = (await bobFlash.innerText()).trim();
+    check((await bobFlash.isDisabled()) && /^\d+ S$/.test(charging), `Bob's flashbang is recharging ("${charging}")`);
+    check((await B.evaluate(() => window.__ltSounds)).includes('flashThrow'), 'Bob hears the pin, the throw and the bang');
+    // Ann throws one with Bob in view.
+    check((await A.locator('.flash-btn.armed').count()) === 1, "Ann's Flash button lights up with Bob in view");
+    await A.getByTestId('flash').dispatchEvent('pointerdown');
+    const midThrow = A.screenshot({ path: join(out, 'ann-throwing.png') });
+    await B.getByTestId('flashed').waitFor({ timeout: 5000 });
+    const whiteText = await B.getByTestId('flashed').innerText();
+    const whiteness = Number(await B.getByTestId('flashed').evaluate((e) => getComputedStyle(e).opacity));
+    check(/flashed by ann/i.test(whiteText) && whiteness > 0.9, `Bob's screen goes white ("${whiteText}", opacity ${whiteness})`);
+    await B.screenshot({ path: join(out, 'bob-flashed.png') });
+    await midThrow;
+    const bobHeardFlash = await B.evaluate(() => window.__ltSounds.slice());
+    check(bobHeardFlash.includes('flashed') && !bobHeardFlash.includes('flashBang'), 'Bob hears it go off right beside him, not across the field');
+    await A.locator('.hitmarker').waitFor({ state: 'attached', timeout: 3000 }).then(
+      () => check(true, 'Ann sees a hit marker as it goes off'),
+      () => check(false, 'Ann sees a hit marker as it goes off'),
+    );
+    check((await A.getByTestId('flash').isDisabled()) && (await B.locator('.hp').innerText()).includes('100'), "Ann's flashbang recharges, and it did no damage (Bob still 100 HP)");
+    await B.waitForTimeout(2500);
+    const fading = Number(await B.getByTestId('flashed').evaluate((e) => getComputedStyle(e).opacity).catch(() => 0));
+    check(fading > 0 && fading < 0.6, `the white fades (opacity ${fading.toFixed(2)} after 2.5 s)`);
+    await B.getByTestId('flashed').waitFor({ state: 'detached', timeout: 4000 });
+    check(true, 'and wears off');
+
     const fireBtn = A.getByTestId('fire');
     let annSawKill = null;
     for (let i = 1; i <= 4; i++) {

@@ -12,7 +12,7 @@ import { savedGun } from '../ui/loadout.ts';
 import { GUNS, gun as gunById, hitsToEliminate } from '../game/guns.ts';
 
 /** The scrolling marquee under the cabinet: the rules at a glance. */
-const TICKER = [`${GUNS.length} guns in the armory`, 'Hold scope to zoom', 'Respawn in seconds', 'Only you two in view'];
+const TICKER = [`${GUNS.length} guns in the armory`, 'Hold scope to zoom', 'Flashbang every 20 s', 'Respawn in seconds', 'Only you two in view'];
 
 export function Home() {
   const { uid, error: authError } = useUid();
@@ -139,7 +139,7 @@ export function Home() {
         <ol className="steps">
           <li><span className="step-icon"><Users /></span>One player creates a game. The other joins with its 4-letter code.</li>
           <li><span className="step-icon"><Footprints /></span>Spread out. Hold your phone like a blaster, with the camera facing away from you.</li>
-          <li><span className="step-icon"><Crosshair /></span>Put the crosshair on the other player and press Fire. The AI checks that the crosshair is on a person. Enough hits and they are out for a few seconds: four with the pistol, two with the shotgun.</li>
+          <li><span className="step-icon"><Crosshair /></span>Put the crosshair on the other player and press Fire. The AI checks that the crosshair is on a person. Enough hits and they are out for a few seconds: four with the pistol, two with the shotgun. Press Flash with them anywhere in view to white out their screen for a few seconds.</li>
           <li><span className="step-icon"><Eye /></span>Play where only the two of you are in view: anyone under the crosshair counts as a hit.</li>
         </ol>
       </Panel>

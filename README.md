@@ -21,6 +21,16 @@ Details that make it reliable:
 
 **Server rules:** the database (`database.rules.json`) accepts a hit only if the game is live, both players are alive, the shooter isn't the target, the damage is exactly the shooter's gun damage, that gun's cooldown has passed and spawn protection is over. Each player's gun must match the table in `src/game/guns.ts` and can't change while a game is live. A hit is one atomic write, so it can never apply twice.
 
+## The flashbang
+
+Every player also carries a flashbang: the **Flash** button above Scope (or the F key). Throw it with the other player **anywhere in view**, within 15 m. The crosshair doesn't need to be on them. The button lights up yellow when someone is in range.
+
+- **Them:** their screen goes pure white for 1.5 s, then fades back over 2.5 s. The bang goes off right beside them, their ears ring, and every other sound is muffled until the white clears. They can still press Fire, but they can't see what they're aiming at. It does no damage.
+- **You:** you pull the pin, throw, and see it tumble into the view and pop where it lands. A hit marker shows if it caught them. If it missed, they hear it go off somewhere else.
+- **Recharge:** 20 s after every throw, hit or miss. The button counts down.
+
+Server rules hold it to the same limits as a shot. A catch is accepted only if the game is live, both players are alive, the target isn't spawn-protected and is no further than 15 m, and 20 s have passed since the thrower's last throw. The catch and the recharge stamp go in one write, so the recharge can't be skipped. `src/game/flash.ts` has the numbers, and a unit test checks that the rules match them.
+
 ## The guns
 
 Pick one in the **Armory** (on the home screen, in the lobby, and from Practice). It shows each gun in a display case with its stats, a Test fire button, and an Equip button. Your pick stays on your phone, the other player sees it next to your name in the lobby, and it locks when the game starts.
@@ -60,6 +70,7 @@ Everything else is synthesized in the browser. Phone speakers can't play bass, s
 - **Hits:** a bullet impact and a hit-marker tick on a hit, a heavier impact and confirm tone on a kill, and sometimes a ricochet on a miss.
 - **Reloads,** timed to each gun: magazine out, in, and the slide or charging handle (pistol, SMG, rifle); cylinder out, empties dumped, six rounds in, cylinder shut and hammer back (revolver); four shells pushed in and the pump racked (shotgun); bolt open, magazine swap, bolt closed (sniper). A dry click on empty.
 - **Getting hit:** a thud for a hit and a heavier one when eliminated. Android phones also vibrate.
+- **Flashbangs:** the pin, the spoon flying off and a whoosh, then a distant bang as it lands. Caught by one: a deafening bang, two close high tones beating against each other for the ringing, and everything else crossfaded to a copy through a low-pass filter (after the clipper, so the clipper's distortion can't put the top end back) until the white fades.
 - **iPhone:** sounds play even with the silent switch on (iOS 17 and later), which also pauses music from other apps while you play. Audio starts on your first tap anywhere in the app.
 
 ## The look
@@ -109,7 +120,7 @@ The free plan allows 100 players connected at once and about 360 MB of site down
 
 1. One player creates a game. The other joins with its 4-letter code (or the shared link). A third person is turned away.
 2. The host sets the game length, kill limit and respawn time, then starts.
-3. After a 5-second countdown, put the crosshair on the other player and fire. Enough hits for your gun (four with the pistol) eliminate them for a few seconds, then they come back with 2 s of protection.
+3. After a 5-second countdown, put the crosshair on the other player and fire. Enough hits for your gun (four with the pistol) eliminate them for a few seconds, then they come back with 2 s of protection. Throw a flashbang to white out their screen (see The flashbang).
 4. First to the kill limit wins, or most kills when time runs out. Play again keeps the same two players.
 
 Each player picks a gun in the Armory before the game (see The guns). **Scope** (hold): real camera zoom on Android Chrome, by the gun's scope factor; a magnified view on iPhone (Safari doesn't let web pages zoom the camera).
@@ -118,24 +129,24 @@ Each player picks a gun in the Armory before the game (see The guns). **Scope** 
 
 ## Tools
 
-- **Practice:** no server. Aim at a friend and fire with your equipped gun (the gun button at the top opens the Armory). It logs every hit or miss, how sure the AI was, and the distance. "Boxes" draws what the AI sees: the dashed box is the person, the solid box is the part that counts.
+- **Practice:** no server. Aim at a friend and fire with your equipped gun (the gun button at the top opens the Armory), or throw a flashbang. It logs every hit or miss, how sure the AI was, and the distance, and whether a flashbang caught anyone. "Boxes" draws what the AI sees: the dashed box is the person, the solid box is the part that counts.
 - **Range test:** have a friend walk away from you and watch where the AI stops seeing them. Shows the camera resolution, checks per second and the time per check. You can switch between 1080p and 4K.
 
 ## Tests
 
 ```bash
 npm run typecheck
-npm test            # 76 unit tests: hit area, gun width and range, lag window, distance, crosshair lock, health rules, scoreboard, gun catalog, every gun's model
-npm run test:rules  # 46 database rules tests on the emulator, with two separate signed-in players
+npm test            # 87 unit tests: hit area, gun width and range, lag window, distance, crosshair lock, health rules, scoreboard, gun catalog, every gun's model, the flashbang
+npm run test:rules  # 57 database rules tests on the emulator, with two separate signed-in players
 npm run test:e2e    # two Chrome browsers with fake cameras play a full game on the emulators
 npm run test:sounds # renders every sound and checks it (no emulators needed)
 ```
 
-`test:sounds` renders each sound offline in Chrome and checks that nothing is silent or clips (including 36 randomised shots from all six guns, 18 rounds of automatic fire and a burst), that every gun's recording loads, that each gunshot is loud through a simulated phone speaker (nothing below about 350 Hz), that the other player's shot is clearly quieter but still heard, that each reload ends on its last step inside that gun's reload time, and that a gun whose recording fails to load still fires. It also checks that the first tap starts audio, and that shots fired while audio is blocked are dropped rather than all playing at once later. It writes a WAV of every sound to `tests/sound/out` so you can listen.
+`test:sounds` renders each sound offline in Chrome and checks that nothing is silent or clips (including 36 randomised shots from all six guns, 18 rounds of automatic fire and a burst), that every gun's recording loads, that each gunshot is loud through a simulated phone speaker (nothing below about 350 Hz), that the other player's shot is clearly quieter but still heard, that each reload ends on its last step inside that gun's reload time, and that a gun whose recording fails to load still fires. For the flashbang it checks that being caught is as loud as the loudest gunshot and one that misses you is clearly quieter, that your ears ring and then stop, that a gunshot during the white loses its top end and sounds normal again once it fades, and that a thrown one bangs as it lands. It also checks that the first tap starts audio, and that shots fired while audio is blocked are dropped rather than all playing at once later. It writes a WAV of every sound to `tests/sound/out` so you can listen.
 
 The E2E test runs a dev build with `?testdetector=1`, which swaps the AI for a stand-in that treats a magenta rectangle as a person. This test switch only exists in dev builds. Ann's fake camera films the rectangle and Bob's films an empty room.
 
-It checks a full game. A third player is turned away, and Bob picks the shotgun in the Armory, which Ann then sees next to his name. Ann's crosshair locks on and Bob's doesn't, and Bob's shot at an empty room misses with nothing on screen, but both phones hear his shotgun. Ann's gun recoils and fires a tracer, and each phone plays the right sounds: its own shots, the other player's shots, the hits, the kill and the elimination. Ann's four pistol hits drop Bob's health step by step while Ann sees only hit markers (red on the kill), Bob sees "Hit by Ann's Blip" and then the kill cam, and he can't be hit while down. After that: respawn, spawn protection, a correct scoreboard, and Play again. In a second round Ann switches to the SMG and holds Fire: it fires automatically, and its eight hits go through the database and take Bob out.
+It checks a full game. A third player is turned away, and Bob picks the shotgun in the Armory, which Ann then sees next to his name. Ann's crosshair locks on and Bob's doesn't, and Bob's shot at an empty room misses with nothing on screen, but both phones hear his shotgun. Bob's flashbang at the empty room catches nobody and starts recharging, while Ann hears it go off. Ann's Flash button lights up with Bob in view, and her flashbang turns Bob's screen white ("Flashed by Ann") with the bang beside him; the white fades and wears off, and he loses no health. Ann's gun recoils and fires a tracer, and each phone plays the right sounds: its own shots, the other player's shots, the hits, the kill and the elimination. Ann's four pistol hits drop Bob's health step by step while Ann sees only hit markers (red on the kill), Bob sees "Hit by Ann's Blip" and then the kill cam, and he can't be hit while down. After that: respawn, spawn protection, a correct scoreboard, and Play again. In a second round Ann switches to the SMG and holds Fire: it fires automatically, and its eight hits go through the database and take Bob out.
 
 The real AI model was checked separately in Chrome. It loads, runs on the GPU at about 15 checks a second, and finds no one in an empty room. Whether it reliably finds real players can only be checked with real people (see below).
 
@@ -150,6 +161,7 @@ The rules and E2E tests need Java (`brew install openjdk`). If `npm run phones` 
 5. **Two-player game:** a full round. Check that hits feel instant, the "Hit by" message is right, and the kill cam shows the moment.
 6. **Sound:** shots should be loud on the phone speaker, also with the iPhone silent switch on, and you should hear the other player's shots.
 7. **Guns:** a round with the SMG (hold Fire) and one with the shotgun up close and from beyond 12 m.
+8. **Flashbang:** throw one with the other player at the edge of the view, and one from beyond 15 m. Check the white feels long enough to matter but not unfair, and the ringing isn't too loud.
 
 If moving shots miss too often, widen the lag window in `src/game/constants.ts`. If shots beside people count, lower `HIT_WIDTH` in `src/game/personHit.ts`.
 
@@ -159,16 +171,18 @@ If moving shots miss too often, widen the lag window in `src/game/constants.ts`.
 src/
   detect/people.ts          person detector: MediaPipe Object Detector loader (and the E2E stand-in)
   detect/peoplePipeline.ts  camera frames to the detector: center and full passes, results kept 0.7 s
-  game/personHit.ts         hit area, gun width and range, lag window, distance, crosshair lock (pure, unit tested)
-  game/fire.ts              one shot: kill cam grab, press-frame check, lag window
+  game/personHit.ts         hit area, gun width and range, lag window, distance, crosshair lock, flashbang catch (pure, unit tested)
+  game/fire.ts              one shot or flashbang: kill cam grab, press-frame check, lag window
+  game/flash.ts             the flashbang: range, recharge, how long the white lasts (mirrored by database.rules.json)
   game/guns.ts              the six guns: damage, firing, magazine, reload, range, sound (mirrored by database.rules.json)
   game/rules.ts             health, respawn and protection (mirrored by database.rules.json)
   net/game.ts               every database write the game makes, and the ordered hit sender
-  ui/sound.ts               recorded gunshots per gun, synthesized actions, reloads and hits; starts audio on the first tap
+  ui/sound.ts               recorded gunshots per gun, synthesized actions, reloads, hits and flashbangs; starts audio on the first tap
   ui/useWeapon.ts           trigger, magazine and reload: semi, automatic and burst
   ui/gunModel.ts            guns as 3D boxes: the first-person and showcase cameras (pure, unit tested)
   ui/gunShapes.ts           the six guns' boxes
   ui/Gun.tsx                the gun in your hand: recoil, action, muzzle flash, casing, tracer, reload
+  ui/flashbang.tsx          the Flash button, the throw, and the white screen
   ui/GunPreview.tsx         a gun side-on, for the Armory, home screen and lobby
   ui/Arcade.tsx             the home screen's cabinet art: the demo match and the control deck
   ui/theme.css              the arcade look: colours, pixel fonts, panels, HUD, CRT scanlines

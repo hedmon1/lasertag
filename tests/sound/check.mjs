@@ -5,6 +5,8 @@
 //     nothing below ~350 Hz); the other player's shot is clearly quieter but still heard
 //   - each reload finishes inside that gun's reload time, ending on its last step
 //   - two gunshots are never identical, and a gun whose recording fails to load still fires
+//   - a flashbang that catches you is the loudest thing in the game, your ears ring, and
+//     everything else is muffled until the white fades; a thrown one bangs as it lands
 //   - audio starts on the first tap anywhere, and sounds asked for while audio is blocked
 //     are dropped instead of all playing at once later
 //
@@ -21,6 +23,7 @@ const out = join(here, 'out');
 mkdirSync(out, { recursive: true });
 const PORT = 4636;
 const BASE = `http://127.0.0.1:${PORT}`;
+const FLASH_FLIGHT = 600; // FLASH.flightMs in src/game/flash.ts
 const CHROME = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 let failures = 0;
@@ -141,6 +144,57 @@ async function peaks(runs) {
   return out;
 }
 
+/** Runs in the page: the flashbang's ringing, muffling and timing. */
+async function flashChecks() {
+  const m = await import('/src/ui/sound.ts');
+  const { FLASH, FLASH_TOTAL_MS } = await import('/src/game/flash.ts');
+  const filter = async (buf, type, hz, q, stages = 2) => {
+    const off = new OfflineAudioContext(buf.numberOfChannels, buf.length, buf.sampleRate);
+    const src = off.createBufferSource();
+    src.buffer = buf;
+    let node = src;
+    for (let i = 0; i < stages; i++) {
+      const f = off.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = hz;
+      f.Q.value = q;
+      node.connect(f);
+      node = f;
+    }
+    node.connect(off.destination);
+    src.start();
+    return off.startRendering();
+  };
+  const db = (x) => (x > 0 ? 20 * Math.log10(x) : -200);
+  const rms = (b, from, to) => {
+    let sum = 0, n = 0;
+    for (let ch = 0; ch < b.numberOfChannels; ch++) {
+      const d = b.getChannelData(ch);
+      for (let i = Math.floor(from * b.sampleRate); i < Math.min(d.length, Math.floor(to * b.sampleRate)); i++, n++) sum += d[i] * d[i];
+    }
+    return n ? db(Math.sqrt(sum / n)) : -200;
+  };
+  // Ringing ears: a steady tone near 3.75 kHz a second after the bang, gone by the end.
+  const caught = await filter(await m.renderSound('flashed', 3.4), 'bandpass', 3756, 20);
+  // A pistol shot's top end (above 9 kHz, well clear of the ringing): during the white, then
+  // after it has faded.
+  const top = async (list, at) => rms(await filter(await m.renderSounds(list, 5.2), 'highpass', 9000, 0, 4), at / 1000, at / 1000 + 0.25);
+  const later = FLASH_TOTAL_MS + 150;
+  // The throw: quiet while it flies, the bang as it lands.
+  const thrown = await filter(await m.renderSound('flashThrow', 2.5), 'highpass', 350, 0.7);
+  const land = FLASH.flightMs / 1000;
+  return {
+    ring: rms(caught, 0.9, 1.4),
+    ringEnd: rms(caught, 2.9, 3.3),
+    during: await top([['flashed', 0], ['gunshot:blip', 900]], 900),
+    plainDuring: await top([['gunshot:blip', 900]], 900),
+    after: await top([['flashed', 0], ['gunshot:blip', later]], later),
+    plainAfter: await top([['gunshot:blip', later]], later),
+    flying: rms(thrown, land - 0.15, land - 0.02),
+    bang: rms(thrown, land, land + 0.12),
+  };
+}
+
 function wav(base64, rate) {
   const data = Buffer.from(base64, 'base64');
   const h = Buffer.alloc(44);
@@ -197,6 +251,18 @@ async function main() {
       check(far.phoneDb >= -24, `${g.name}: the other player still hears it (${far.phoneDb.toFixed(1)} dB)`);
       check(rl.end <= g.reloadMs / 1000, `${g.name}: the reload finishes within ${(g.reloadMs / 1000).toFixed(1)} s (${rl.end.toFixed(2)} s)`);
       check(rl.windows[0] > -40, `${g.name}: the reload ends on its last step as the gun comes back up (${rl.windows[0].toFixed(1)} dB)`);
+    }
+    console.log('Flashbangs');
+    const loudestShot = Math.max(...guns.map((g) => res[`gunshot:${g.id}`].phoneDb));
+    check(res.flashed.phoneDb >= loudestShot - 1, `being caught by a flashbang is as loud as the loudest gunshot (${res.flashed.phoneDb.toFixed(1)} dB, loudest shot ${loudestShot.toFixed(1)} dB)`);
+    check(res.flashed.phoneDb - res.flashBang.phoneDb >= 6, `one that misses you is clearly quieter (${(res.flashed.phoneDb - res.flashBang.phoneDb).toFixed(1)} dB less)`);
+    for (let i = 0; i < 3; i++) {
+      const f = await page.evaluate(flashChecks);
+      if (i === 0) console.log(`  ${JSON.stringify(Object.fromEntries(Object.entries(f).map(([k, v]) => [k, +v.toFixed(1)])))}`);
+      check(f.ring > -35 && f.ringEnd < -70, `your ears ring after the bang, then stop (${f.ring.toFixed(1)} dB at 1 s, ${f.ringEnd.toFixed(1)} dB at 3 s)`);
+      check(f.plainDuring - f.during >= 20, `a gunshot during the white is muffled (${(f.plainDuring - f.during).toFixed(1)} dB less top end)`);
+      check(Math.abs(f.after - f.plainAfter) <= 6 && f.after - f.during >= 20, `hearing comes back as the white fades (${(f.after - f.plainAfter).toFixed(1)} dB from normal)`);
+      check(f.bang - f.flying >= 15, `a thrown flashbang bangs as it lands, ${FLASH_FLIGHT} ms after the throw (${(f.bang - f.flying).toFixed(1)} dB jump)`);
     }
     check(res['gunshot:blip'].high350to750 > -50, `the pistol's casing pings after the shot (${res['gunshot:blip'].high350to750.toFixed(1)} dB above 3 kHz)`);
     const again = await page.evaluate(measure, ['gunshot:blip', []]);

@@ -721,6 +721,52 @@ table.score tr.me td { color: var(--lime); }
 .hud-btn[aria-pressed='true'] { background-color: var(--cyan); color: var(--ink); transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
 .hud-btn[aria-pressed='true'] svg { color: var(--ink); }
 
+/* ---------- flashbang ---------- */
+.flash-btn svg { width: 20px; height: 24px; color: var(--yellow); }
+.flash-btn.armed svg { color: var(--ink); }
+.thrown { color: var(--yellow); }
+.flash-btn .num { font: 18px/1 var(--term); letter-spacing: 0; }
+.flash-btn:disabled svg { opacity: 0.45; }
+/* Someone in range and the flashbang is ready. */
+.flash-btn.armed { background-color: var(--yellow); color: var(--ink); }
+.throw { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.thrown {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40px;
+  height: 48px;
+  margin: -24px 0 0 -20px;
+  animation: throw var(--flight) steps(10) forwards;
+}
+.thrown svg { display: block; width: 100%; height: 100%; animation: tumble var(--flight) steps(10) forwards; }
+@keyframes throw {
+  0% { transform: translate(-22vw, 30vh) scale(1.5); opacity: 1; }
+  45% { transform: translate(-12vw, -9vh) scale(0.95); opacity: 1; }
+  92% { transform: translate(0, 0) scale(0.4); opacity: 1; }
+  100% { transform: translate(0, 0) scale(0.3); opacity: 0; }
+}
+@keyframes tumble { to { transform: rotate(900deg); } }
+/* Where it landed, seen from afar. */
+.flash-pop {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.55) 9%, rgba(255, 255, 255, 0) 30%);
+  animation: fade 480ms steps(6) var(--flight) forwards;
+}
+/* Above the HUD but under the covers, so the eliminated screen still shows. */
+.whiteout {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.whiteout span { font: 12px/1.4 var(--pixel); text-transform: uppercase; color: rgba(5, 4, 15, 0.22); }
+
 /* ---------- the first-person gun at the right edge ---------- */
 /* Anchored to the bottom-right corner; its width and timings come from the model (Gun.tsx).
    The arm runs on behind the Fire button, as if it came from below the screen. */
@@ -944,5 +990,6 @@ table.score tr.me td { color: var(--lime); }
 .tag.gun-tag svg { width: 10px; height: 10px; stroke-width: 3; margin-top: -1px; }
 
 @media (prefers-reduced-motion: reduce) {
+  .thrown { display: none; }
   .gun *, .gun-preview, .preview-flash, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
 }

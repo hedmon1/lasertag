@@ -2,16 +2,17 @@
 // players. Two-player game: Ann (host, seat 0) and Bob (seat 1). Run with `npm run test:rules`.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
-  INC, RULES, TS, admin, assertFails, assertSucceeds, db, gunDoc, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
+  INC, RULES, TS, admin, assertFails, assertSucceeds, db, flashUpdate, gunDoc, hitUpdate, life, player, read, reset, seedGame, setup, sleep, teardown,
 } from './harness.ts';
 import { gun } from '../../src/game/guns.ts';
+import { FLASH } from '../../src/game/flash.ts';
 
 beforeAll(setup);
 afterAll(teardown);
 beforeEach(reset);
 
 const G = 'games/ABCD';
-const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, gun: gunDoc('blip'), online: true });
+const newPlayer = (name: string, slot: number) => ({ name, joinedAt: TS, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, gun: gunDoc('blip'), online: true });
 
 describe('creating and joining', () => {
   it('lets a signed-in user create a game and take seat 1 (index 0) in one write', async () => {
@@ -108,15 +109,19 @@ describe('starting and ending', () => {
   });
 
   it('lets the host reset both players for another round, but only after the game', async () => {
-    await seedGame('live', { shots: { s1: { by: 'ann', target: 'bob', via: 'ai', dist: 5, at: 1, kill: false } } });
+    await seedGame('live', {
+      shots: { s1: { by: 'ann', target: 'bob', via: 'ai', dist: 5, at: 1, kill: false } },
+      flashes: { f1: { by: 'bob', target: 'ann', dist: 4, at: 1 } },
+    });
     await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ hp: 0, alive: false, seq: 4, diedAt: 5 })));
-    const again = { 'meta/state': 'lobby', shots: null, killcams: null, 'players/bob/life': life({ seq: 5 }), 'players/bob/fired': 0 };
+    const again = { 'meta/state': 'lobby', shots: null, flashes: null, killcams: null, 'players/bob/life': life({ seq: 5 }), 'players/bob/fired': 0 };
     await assertFails(db('ann').ref(G).update(again));
     await admin((d) => d.ref(`${G}/meta/state`).set('ended'));
     await assertFails(db('bob').ref(G).update(again));
     await assertSucceeds(db('ann').ref(G).update(again));
     expect(await read(`${G}/players/bob/life/hp`)).toBe(100);
     expect(await read(`${G}/shots`)).toBe(null);
+    expect(await read(`${G}/flashes`)).toBe(null);
   });
 });
 
@@ -294,6 +299,85 @@ describe('guns', () => {
     await assertSucceeds(db('bob').ref(G).update(hitUpdate('bob', 'ann', 's3', life(), { with: 'longshot' })));
     await sleep(300);
     await assertFails(db('bob').ref(G).update(hitUpdate('bob', 'ann', 's4', await read(`${G}/players/ann/life`), { with: 'longshot' })));
+  });
+});
+
+describe('flashbangs', () => {
+  beforeEach(() => seedGame('live'));
+
+  it('records a catch and starts the recharge in one write, without touching health', async () => {
+    await assertSucceeds(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1')));
+    const f = await read(`${G}/flashes/f1`);
+    expect(f.by).toBe('ann');
+    expect(f.target).toBe('bob');
+    expect(Math.abs(f.at - Date.now())).toBeLessThan(5000);
+    expect(await read(`${G}/players/ann/lastFlashAt`)).toBe(f.at);
+    expect((await read(`${G}/players/bob/life`)).hp).toBe(100);
+  });
+
+  it('lets the other player see it, but nobody outside the game', async () => {
+    await db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1'));
+    await assertSucceeds(db('bob').ref(`${G}/flashes`).get());
+    await assertFails(db('stranger').ref(`${G}/flashes`).get());
+  });
+
+  it('lets a miss start the recharge on its own', async () => {
+    await assertSucceeds(db('bob').ref(`${G}/players/bob/lastFlashAt`).set(TS));
+    await assertFails(db('ann').ref(`${G}/players/bob/lastFlashAt`).set(TS));
+    await assertFails(db('bob').ref(`${G}/players/bob/lastFlashAt`).set(0));
+  });
+
+  it('refuses a catch that skips the recharge stamp', async () => {
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1', { skipStamp: true })));
+  });
+
+  it(`refuses a second flashbang within ${FLASH.cooldownMs / 1000} s, hit or miss`, async () => {
+    await db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1'));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f2')));
+    await db('bob').ref(`${G}/players/bob/lastFlashAt`).set(TS); // Bob's throw missed
+    await assertFails(db('bob').ref(G).update(flashUpdate('bob', 'ann', 'f3')));
+    await admin((d) => d.ref(`${G}/players/ann/lastFlashAt`).set(Date.now() - FLASH.cooldownMs - 200));
+    await assertSucceeds(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f4')));
+  });
+
+  it('works in a game started before flashbangs existed (no recharge stamp yet)', async () => {
+    await admin((d) => d.ref(`${G}/players/ann/lastFlashAt`).remove());
+    await assertSucceeds(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1')));
+  });
+
+  it('refuses flashing yourself, forging one as the other player, or extra fields', async () => {
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'ann', 'f1')));
+    await assertFails(db('ann').ref(G).update({ ...flashUpdate('bob', 'ann', 'f1'), 'players/bob/lastFlashAt': TS }));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1', { flash: { damage: 50 } })));
+  });
+
+  it(`refuses a catch further than ${FLASH.rangeM} m, or a made-up time`, async () => {
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1', { flash: { dist: FLASH.rangeM + 1 } })));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1', { flash: { at: Date.now() - 60000 } })));
+    await assertSucceeds(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1', { flash: { dist: 0 } })));
+  });
+
+  it('refuses flashing a player who is down or spawn-protected, or throwing while down', async () => {
+    await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ hp: 0, alive: false, seq: 4, shot: 's4', diedAt: Date.now() })));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1')));
+    await assertFails(db('bob').ref(G).update(flashUpdate('bob', 'ann', 'f2')));
+    await admin((d) => d.ref(`${G}/players/bob/life`).set(life({ seq: 5, spawnAt: Date.now() })));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f3')));
+  });
+
+  it('refuses flashbangs outside the game window', async () => {
+    await admin((d) => d.ref(`${G}/meta/state`).set('ended'));
+    await assertFails(db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1')));
+  });
+
+  it('never lets anyone rewrite a flashbang, and lets the host clear them after the game', async () => {
+    await db('ann').ref(G).update(flashUpdate('ann', 'bob', 'f1'));
+    await assertFails(db('ann').ref(`${G}/flashes/f1/target`).set('ann'));
+    await assertFails(db('bob').ref(`${G}/flashes/f1`).remove());
+    await assertFails(db('ann').ref(`${G}/flashes`).remove());
+    await admin((d) => d.ref(`${G}/meta/state`).set('ended'));
+    await assertFails(db('bob').ref(`${G}/flashes`).remove());
+    await assertSucceeds(db('ann').ref(`${G}/flashes`).remove());
   });
 });
 

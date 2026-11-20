@@ -9,16 +9,27 @@
 // further away. Until a gun's recording has loaded, a synthesized shot stands in for it.
 // Everything runs through a soft clipper, which makes it loud without harsh distortion.
 //
+// A flashbang that catches you goes off right beside you: your ears ring and everything else
+// goes muffled behind a low-pass filter until the white fades.
+//
 // iPhone: Safari mutes web audio when the silent switch is on, unless the page asks for the
 // "playback" audio session (iOS 17 and later), and it only starts audio inside a tap.
 // installAudioUnlock() handles both, on the first tap anywhere in the app.
 import { GUNS, gun as gunById, type Gun, type GunId } from '../game/guns.ts';
+import { FLASH } from '../game/flash.ts';
 
 interface Chain {
   ctx: BaseAudioContext;
   input: AudioNode;
   reverb: AudioNode;
   echo: AudioNode;
+  /** The mix as it is, at full level until a flashbang catches you... */
+  clear: GainNode;
+  /** ...when this takes over: the same mix through a low-pass filter. */
+  muffled: GainNode;
+  muffle: BiquadFilterNode;
+  /** Never muffled, straight to the output: sounds inside your head (ringing ears). */
+  dry: AudioNode;
 }
 
 let live: AudioContext | null = null;
@@ -57,7 +68,24 @@ function buildChain(c: BaseAudioContext, dest: AudioNode): Chain {
   drive.oversample = 'none';
   const master = c.createGain();
   master.gain.value = 0.95;
-  input.connect(drive).connect(master).connect(dest);
+  input.connect(drive);
+  master.connect(dest);
+  // A flashbang crossfades from the clear mix to a muffled copy and back. The muffle comes
+  // after the clipper (before it, the clipper's distortion would put the top end straight
+  // back), and it's a separate path so the normal sound never goes through a filter. Q is in
+  // dB here: -6 dB is a linear Q of 0.5, which never rings, so the filter can't push a peak
+  // past full scale.
+  const clear = c.createGain();
+  drive.connect(clear).connect(master);
+  const muffle = c.createBiquadFilter();
+  muffle.type = 'lowpass';
+  muffle.frequency.value = 350;
+  muffle.Q.value = -6;
+  const muffled = c.createGain();
+  muffled.gain.value = 0;
+  drive.connect(muffle).connect(muffled).connect(master);
+  const dry = c.createGain();
+  dry.connect(master);
 
   const reverb = c.createConvolver();
   reverb.buffer = roomImpulse(c, 0.9);
@@ -77,7 +105,7 @@ function buildChain(c: BaseAudioContext, dest: AudioNode): Chain {
     g.gain.value = gain;
     echo.connect(d).connect(f).connect(g).connect(input);
   }
-  return { ctx: c, input, reverb, echo };
+  return { ctx: c, input, reverb, echo, clear, muffled, muffle, dry };
 }
 
 const noiseBufs = new WeakMap<BaseAudioContext, AudioBuffer>();
@@ -457,6 +485,58 @@ function reload(id: GunId) {
   }
 }
 
+// ---------- flashbangs ----------
+
+/** A flashbang going off across the field: a flat crack, a dull boom and a long echo. */
+function bangFar(delay: number) {
+  noise({ ms: 6, gain: 0.55, type: 'highpass', from: 2500, delay, attackMs: 0.3 });
+  noise({ ms: 420, gain: 0.75, type: 'lowpass', from: vary(3200, 0.08), to: 220, q: 0.7, delay, reverb: 0.9, echo: 1 });
+  tone({ type: 'sine', from: 95, to: 38, ms: 320, gain: 0.45, delay });
+}
+
+/**
+ * Everything but the ringing goes muffled and a little quieter just after the bang, and clears
+ * as the white fades: the filter opens up while the clear mix fades back in. The muffled side
+ * tops out at 0.7, so the ringing on top can't push past full scale.
+ */
+function muffle() {
+  const { ctx: c, clear, muffled, muffle: m } = chain!;
+  // The bang itself gets through: the muffle closes in over its tail.
+  const t = c.currentTime, start = t + 0.1, shut = t + 0.25;
+  const hold = t + FLASH.holdMs / 1000, back = t + (FLASH.holdMs + FLASH.fadeMs) / 1000;
+  for (const [g, from, to] of [[clear.gain, 1, 0], [muffled.gain, 0, 0.7]] as const) {
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(from, t);
+    g.setValueAtTime(from, start);
+    g.linearRampToValueAtTime(to, shut);
+    g.setValueAtTime(to, hold);
+    g.linearRampToValueAtTime(from, back);
+  }
+  m.frequency.cancelScheduledValues(t);
+  m.frequency.setValueAtTime(350, t);
+  m.frequency.setValueAtTime(350, hold);
+  m.frequency.exponentialRampToValueAtTime(6000, back);
+}
+
+/** Ringing ears: two close high tones beating against each other, past the muffle. */
+function ring() {
+  const { ctx: c, dry } = chain!;
+  const t = c.currentTime + 0.05, end = t + 2.7;
+  for (const [freq, gain] of [[3750, 0.11], [3762, 0.07]]) {
+    const osc = c.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+    const g = c.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.25);
+    g.gain.setValueAtTime(gain, t + 1.2);
+    g.gain.exponentialRampToValueAtTime(0.0001, end);
+    osc.connect(g).connect(dry);
+    osc.start(t);
+    osc.stop(end + 0.05);
+  }
+}
+
 const synth = {
   /** The bullet landing on the other player (shooter hears it), with a hit-marker tick. */
   impact() {
@@ -518,6 +598,30 @@ const synth = {
   go() {
     tone({ type: 'sine', from: 1320, ms: 300, gain: 0.16 });
   },
+  /** Pulling the pin, the spoon flying off and the throw; the bang follows when it lands. */
+  flashThrow() {
+    noise({ ms: 70, gain: 0.18, type: 'bandpass', from: 3800, to: 5200, q: 3 }); // pin sliding out
+    click(60, 4200, 0.45);
+    click(165, 3200, 0.4); // spoon released
+    tone({ type: 'triangle', from: 2900, to: 2500, ms: 140, gain: 0.12, delay: 170 });
+    tone({ type: 'sine', from: 4600, to: 4200, ms: 90, gain: 0.06, delay: 170 });
+    noise({ ms: 260, gain: 0.35, type: 'bandpass', from: 500, to: 1600, q: 1.2, delay: 230, attackMs: 120 }); // whoosh
+    bangFar(FLASH.flightMs);
+  },
+  /** The other player's flashbang, when it missed you. */
+  flashBang() {
+    bangFar(0);
+  },
+  /** Caught by a flashbang: a deafening bang beside you, then ringing ears and muffled hearing. */
+  flashed() {
+    if (!chain) return;
+    noise({ ms: 8, gain: 1.4, type: 'highpass', from: 1800, attackMs: 0.2 }); // crack
+    noise({ ms: 520, gain: 1.8, type: 'lowpass', from: 9000, to: 160, q: 0.8, reverb: 0.6 }); // blast
+    noise({ ms: 260, gain: 1.5, type: 'bandpass', from: 2600, to: 700, q: 0.9 }); // punch, where a phone speaker is loudest
+    tone({ type: 'sine', from: 120, to: 32, ms: 420, gain: 1 }); // thump
+    muffle();
+    ring();
+  },
 };
 
 type SynthName = keyof typeof synth;
@@ -556,6 +660,9 @@ export const sfx = {
   shot: (id: GunId) => play(`gunshot:${id}`),
   distantShot: (id: GunId) => play(`distantShot:${id}`),
   reload: (id: GunId) => play(`reload:${id}`),
+  flashThrow: () => play('flashThrow'),
+  flashBang: () => play('flashBang'),
+  flashed: () => play('flashed'),
   /** Only some misses whine off something. */
   ricochet: () => {
     if (Math.random() < 0.35) play('ricochet');

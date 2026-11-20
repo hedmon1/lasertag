@@ -77,6 +77,10 @@
               ".write": "auth != null && auth.uid == $uid",
               ".validate": "newData.isNumber() && (newData.val() == now || (newData.val() == 0 && !data.exists()))"
             },
+            "lastFlashAt": {
+              ".write": "auth != null && auth.uid == $uid",
+              ".validate": "newData.isNumber() && (newData.val() == now || (newData.val() == 0 && !data.exists()))"
+            },
             "gun": {
               ".write": "auth != null && auth.uid == $uid && root.child('games').child($code).child('meta').child('state').val() != 'live'",
               ".validate": "newData.hasChildren(['id', 'damage', 'cooldownMs']) && ((newData.child('id').val() == 'blip' && newData.child('damage').val() == 25 && newData.child('cooldownMs').val() == 250) || (newData.child('id').val() == 'stinger' && newData.child('damage').val() == 13 && newData.child('cooldownMs').val() == 70) || (newData.child('id').val() == 'triplet' && newData.child('damage').val() == 20 && newData.child('cooldownMs').val() == 60) || (newData.child('id').val() == 'thumper' && newData.child('damage').val() == 34 && newData.child('cooldownMs').val() == 420) || (newData.child('id').val() == 'boomstick' && newData.child('damage').val() == 50 && newData.child('cooldownMs').val() == 660) || (newData.child('id').val() == 'longshot' && newData.child('damage').val() == 80 && newData.child('cooldownMs').val() == 1050))",
@@ -113,6 +117,20 @@
             "dist": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 200" },
             "at": { ".validate": "newData.val() == now" },
             "kill": { ".validate": "newData.isBoolean()" },
+            "$other": { ".validate": false }
+          }
+        },
+
+        "flashes": {
+          ".read": "auth != null && root.child('games').child($code).child('players').child(auth.uid).exists()",
+          ".write": "auth != null && root.child('games').child($code).child('meta').child('host').val() == auth.uid && !newData.exists() && root.child('games').child($code).child('meta').child('state').val() != 'live'",
+          "$id": {
+            ".write": "auth != null && !data.exists() && newData.child('by').val() == auth.uid",
+            ".validate": "newData.hasChildren(['by', 'target', 'dist', 'at']) && root.child('games').child($code).child('meta').child('state').val() == 'live' && now >= root.child('games').child($code).child('meta').child('startAt').val() && now < root.child('games').child($code).child('meta').child('endAt').val() && newData.child('target').val() != auth.uid && root.child('games').child($code).child('players').child(auth.uid).child('slot').val() >= 0 && root.child('games').child($code).child('players').child(auth.uid).child('life').child('alive').val() == true && (!root.child('games').child($code).child('players').child(auth.uid).child('lastFlashAt').exists() || now >= root.child('games').child($code).child('players').child(auth.uid).child('lastFlashAt').val() + 20000) && newData.parent().parent().child('players').child(auth.uid).child('lastFlashAt').val() == now && root.child('games').child($code).child('players').child(newData.child('target').val()).child('slot').val() >= 0 && root.child('games').child($code).child('players').child(newData.child('target').val()).child('life').child('alive').val() == true && now >= root.child('games').child($code).child('players').child(newData.child('target').val()).child('life').child('spawnAt').val() + root.child('games').child($code).child('meta').child('rules').child('protectMs').val()",
+            "by": { ".validate": "newData.isString()" },
+            "target": { ".validate": "newData.isString()" },
+            "dist": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 15" },
+            "at": { ".validate": "newData.val() == now" },
             "$other": { ".validate": false }
           }
         },

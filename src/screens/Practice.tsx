@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Crosshair as CrosshairIcon, Eye, EyeOff, RotateCcw, RotateCw, Swords, ZoomIn } from 'lucide-react';
 import { peopleAI } from '../detect/people.ts';
-import { fire } from '../game/fire.ts';
-import { aimedAtPerson } from '../game/personHit.ts';
+import { fire, throwFlash } from '../game/fire.ts';
+import { aimedAtPerson, personInView } from '../game/personHit.ts';
+import { FLASH } from '../game/flash.ts';
 import { gun as gunById } from '../game/guns.ts';
 import { CameraView, useCameraRig, useScope } from '../ui/CameraView.tsx';
 import { Crosshair, HitMarker, useDetectorState } from '../ui/hud.tsx';
@@ -12,6 +13,7 @@ import { load, save } from '../ui/storage.ts';
 import { savedGun } from '../ui/loadout.ts';
 import { useSpaceTrigger, useWeapon } from '../ui/useWeapon.ts';
 import { keepAwake } from '../camera/camera.ts';
+import { FlashButton, ThrownFlashbang, useFlashbang } from '../ui/flashbang.tsx';
 
 interface LogEntry {
   key: number;
@@ -26,6 +28,7 @@ export function Practice() {
   const detector = useDetectorState();
   const [overlay, setOverlay] = useState(() => load('practice.debug', '1') === '1');
   const [locked, setLocked] = useState(false);
+  const [inView, setInView] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [marker, setMarker] = useState<number | null>(null);
   const [hits, setHits] = useState({ hits: 0, shots: 0 });
@@ -39,8 +42,9 @@ export function Practice() {
   useEffect(() => {
     if (!rig) return;
     const id = setInterval(() => {
-      const vw = rig.video.videoWidth, vh = rig.video.videoHeight;
-      setLocked(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, performance.now(), { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
+      setLocked(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
   }, [rig, g, frameZoom]);
@@ -64,6 +68,19 @@ export function Practice() {
   });
   useSpaceTrigger(weapon);
 
+  const flash = useFlashbang({
+    now: Date.now,
+    canThrow: () => !!rig,
+    onThrow: async () => {
+      if (!rig) return;
+      const thrownAt = performance.now();
+      const o = await throwFlash({ pipeline: rig.pipeline, video: rig.video, frameZoom: scope.frameZoom });
+      if (o.kind === 'hit') setTimeout(() => setMarker(Date.now()), Math.max(0, FLASH.flightMs - (performance.now() - thrownAt)));
+      const d = o.kind === 'hit' && o.distanceM ? ` · ${o.distanceM.toFixed(1)} m` : '';
+      setLog((l) => [{ key: performance.now(), text: o.kind === 'hit' ? `FLASH CAUGHT${d}` : 'FLASH MISSED' }, ...l].slice(0, 5));
+    },
+  });
+
   return (
     <CameraView videoRef={videoRef} rig={rig} viewZoom={scope.viewZoom} frameZoom={scope.frameZoom} overlay={overlay}>
       <div className="hud">
@@ -80,14 +97,16 @@ export function Practice() {
           <div>
             AI <b>{detector === 'ready' ? `ready (${peopleAI.delegate})` : detector}</b> · {hits.hits} / {hits.shots} hits
           </div>
-          {log.length === 0 ? <div className="muted">Aim at a person and fire. Shots appear here.</div> : log.map((l) => <div key={l.key}>{l.text}</div>)}
+          {log.length === 0 ? <div className="muted">Aim at a person and fire, or throw a flashbang. Results appear here.</div> : log.map((l) => <div key={l.key}>{l.text}</div>)}
         </div>
         <Crosshair locked={locked} />
         {locked && <div className="aim-name">Person</div>}
         {marker && <HitMarker key={`marker-${marker}`} kill={false} />}
+        {flash.throws > 0 && <ThrownFlashbang key={flash.throws} />}
         <Gun gun={g.id} shots={weapon.shots} reloading={weapon.reloading} empty={weapon.ammo === 0} />
         <div className="hud-bottom">
           <div className="side-buttons">
+            <FlashButton f={flash} disabled={!rig} armed={inView} />
             <button
               className="hud-btn"
               aria-pressed={scope.scoped}

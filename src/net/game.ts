@@ -6,6 +6,7 @@ import {
 import { database, serverNow } from './firebase.ts';
 import { DEFAULT_RULES, freshLife, lifeAfterHit, type GameRules, type Life } from '../game/rules.ts';
 import { gunDoc, type GunDoc, type GunId } from '../game/guns.ts';
+import { FLASH } from '../game/flash.ts';
 import type { ShotRecord } from '../game/score.ts';
 
 export type GameState = 'lobby' | 'live' | 'ended';
@@ -26,6 +27,8 @@ export interface PlayerDoc {
   life: Life;
   fired: number;
   lastShotAt: number;
+  /** Server time of your last flashbang throw, 0 if none; missing in games from before flashbangs. */
+  lastFlashAt?: number;
   /** Picked in the Armory; locked while a game is live. */
   gun?: GunDoc;
   online?: boolean;
@@ -33,6 +36,16 @@ export interface PlayerDoc {
 
 export type Players = Record<string, PlayerDoc>;
 export type { ShotRecord };
+
+/** A flashbang that caught someone. */
+export interface FlashRecord {
+  id: string;
+  by: string;
+  target: string;
+  /** Estimated distance, 0 when unknown. */
+  dist: number;
+  at: number;
+}
 
 const CODE_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const COUNTDOWN_MS = 5000;
@@ -68,6 +81,7 @@ function newPlayer(name: string, rules: GameRules, seat: number, gun: GunId) {
     life: freshLife(rules),
     fired: 0,
     lastShotAt: 0,
+    lastFlashAt: 0,
     gun: gunDoc(gun),
     online: true,
   };
@@ -133,9 +147,9 @@ export async function endGame(code: string) {
   await set(gameRef(code, 'meta/state'), 'ended');
 }
 
-/** Host only, after a game: clears shots and kill cams and gives everyone full health. */
+/** Host only, after a game: clears shots, flashbangs and kill cams and gives everyone full health. */
 export async function playAgain(code: string, players: Players, rules: GameRules) {
-  const changes: Record<string, unknown> = { 'meta/state': 'lobby', shots: null, killcams: null };
+  const changes: Record<string, unknown> = { 'meta/state': 'lobby', shots: null, flashes: null, killcams: null };
   for (const [uid, p] of Object.entries(players)) {
     changes[`players/${uid}/life`] = freshLife(rules, p.life?.seq ?? 0);
     changes[`players/${uid}/fired`] = 0;
@@ -211,6 +225,27 @@ export function hitSender(code: string, me: string): HitSender {
     }
     return { ok: false, reason: life.alive ? 'rejected' : 'down' };
   };
+}
+
+/**
+ * Uses your flashbang. If it caught the other player, records it (their screen goes white) and
+ * starts your recharge in the same write; a miss only starts the recharge. Returns whether the
+ * database accepted the catch: it refuses one at a downed or protected player, or too soon.
+ */
+export async function sendFlash(code: string, me: string, caught: { target: string; distanceM: number | null } | null): Promise<boolean> {
+  const stamp = { [`players/${me}/lastFlashAt`]: serverTimestamp() };
+  if (caught) {
+    const id = push(gameRef(code, 'flashes')).key!;
+    const dist = caught.distanceM === null ? 0 : Math.max(0, Math.min(FLASH.rangeM, Math.round(caught.distanceM * 10) / 10)) || 0;
+    try {
+      await update(gameRef(code), { ...stamp, [`flashes/${id}`]: { by: me, target: caught.target, dist, at: serverTimestamp() } });
+      return true;
+    } catch {
+      // Refused (they went down or respawned a moment ago): the throw still used the flashbang.
+    }
+  }
+  await update(gameRef(code), stamp).catch(() => {});
+  return false;
 }
 
 export async function countTrigger(code: string, me: string) {

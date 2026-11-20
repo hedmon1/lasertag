@@ -99,6 +99,32 @@ export function resolveShot(input: ShotInput): ShotOutcome {
   return { kind: 'hit', box: best.box, distanceM: distanceFromBox(best.box, input.frameWidth, input.frameHeight, input.zoom) };
 }
 
+export interface FlashInput {
+  throwTime: number;
+  frames: PeopleFrame[];
+  frameWidth: number;
+  frameHeight: number;
+  zoom: number;
+  rangeM: number;
+}
+
+/**
+ * A flashbang catches a person anywhere in the frame, not just under the crosshair, in the
+ * same lag window as a shot and within its range. The nearest one (the tallest box) counts.
+ */
+export function resolveFlash(input: FlashInput): ShotOutcome {
+  let best: PersonBox | null = null;
+  for (const f of input.frames) {
+    if (f.time < input.throwTime - SHOT_WINDOW_BEFORE_MS || f.time > input.throwTime + SHOT_WINDOW_AFTER_MS) continue;
+    for (const b of f.boxes) {
+      if (outOfRange(b, input.frameWidth, input.frameHeight, input.zoom, input.rangeM)) continue;
+      if (!best || b.h > best.h) best = b;
+    }
+  }
+  if (!best) return { kind: 'miss' };
+  return { kind: 'hit', box: best, distanceM: distanceFromBox(best, input.frameWidth, input.frameHeight, input.zoom) };
+}
+
 export interface AimOptions {
   hitWidth?: number;
   rangeM?: number | null;
@@ -114,4 +140,9 @@ export function aimedAtPerson(frames: PeopleFrame[], aim: Pt, now: number, o?: A
       now - f.time <= maxAgeMs &&
       f.boxes.some((b) => boxContains(b, aim, o?.hitWidth) && !(o && outOfRange(b, o.frameWidth, o.frameHeight, o.zoom, o.rangeM))),
   );
+}
+
+/** Whether a flashbang would catch someone right now: a person anywhere in view, in range. */
+export function personInView(frames: PeopleFrame[], now: number, o: Omit<AimOptions, 'hitWidth'>, maxAgeMs = 250): boolean {
+  return frames.some((f) => now - f.time <= maxAgeMs && f.boxes.some((b) => !outOfRange(b, o.frameWidth, o.frameHeight, o.zoom, o.rangeM)));
 }

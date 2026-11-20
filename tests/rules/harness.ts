@@ -52,7 +52,7 @@ export function life(over: Partial<Record<string, unknown>> = {}) {
 
 /** A seeded player, holding the pistol unless `over` says otherwise. */
 export function player(name: string, slot: number, over: Record<string, unknown> = {}) {
-  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, gun: gunDoc('blip'), online: true, ...over };
+  return { name, joinedAt: 1, slot, life: life(), fired: 0, lastShotAt: 0, lastFlashAt: 0, gun: gunDoc('blip'), online: true, ...over };
 }
 
 /**
@@ -107,6 +107,13 @@ export function hitUpdate(
     },
   };
   if (!over.skipLastShot) update[`players/${shooter}/lastShotAt`] = TS;
+  return update;
+}
+
+/** The write a thrower's phone sends when a flashbang catches the other player. */
+export function flashUpdate(thrower: string, target: string, id: string, over: { flash?: Record<string, unknown>; skipStamp?: boolean } = {}) {
+  const update: Record<string, unknown> = { [`flashes/${id}`]: { by: thrower, target, dist: 6.5, at: TS, ...over.flash } };
+  if (!over.skipStamp) update[`players/${thrower}/lastFlashAt`] = TS;
   return update;
 }
 

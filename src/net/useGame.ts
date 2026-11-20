@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { onValue, ref } from 'firebase/database';
 import { currentUser, database, watchServerTime } from './firebase.ts';
-import type { Meta, Players, ShotRecord } from './game.ts';
+import type { FlashRecord, Meta, Players, ShotRecord } from './game.ts';
 
 export interface GameView {
   uid: string | null;
@@ -9,6 +9,8 @@ export interface GameView {
   metaLoaded: boolean;
   players: Players;
   shots: ShotRecord[];
+  /** Flashbangs that caught someone, oldest first. */
+  flashes: FlashRecord[];
   /** False until the players list loads with this device in it. */
   isMember: boolean;
   membershipKnown: boolean;
@@ -33,6 +35,7 @@ export function useGame(code: string): GameView {
   const [metaLoaded, setMetaLoaded] = useState(false);
   const [players, setPlayers] = useState<Players>({});
   const [shotsMap, setShotsMap] = useState<Record<string, Omit<ShotRecord, 'id'>>>({});
+  const [flashMap, setFlashMap] = useState<Record<string, Omit<FlashRecord, 'id'>>>({});
   const [isMember, setIsMember] = useState(false);
   const [membershipKnown, setMembershipKnown] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,13 +79,23 @@ export function useGame(code: string): GameView {
     return onValue(ref(database(), `games/${code}/shots`), (s) => setShotsMap(s.val() ?? {}), () => setShotsMap({}));
   }, [uid, code, isMember, tick]);
 
+  useEffect(() => {
+    if (!uid || !isMember) return;
+    return onValue(ref(database(), `games/${code}/flashes`), (s) => setFlashMap(s.val() ?? {}), () => setFlashMap({}));
+  }, [uid, code, isMember, tick]);
+
   const shots = useMemo(
     () => Object.entries(shotsMap).map(([id, s]) => ({ id, ...s })).sort((a, b) => a.at - b.at),
     [shotsMap],
   );
 
+  const flashes = useMemo(
+    () => Object.entries(flashMap).map(([id, f]) => ({ id, ...f })).sort((a, b) => a.at - b.at),
+    [flashMap],
+  );
+
   return {
-    uid, meta, metaLoaded, players, shots, isMember, membershipKnown,
+    uid, meta, metaLoaded, players, shots, flashes, isMember, membershipKnown,
     error: authError ?? error,
     refresh: () => setTick((t) => t + 1),
   };

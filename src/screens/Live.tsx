@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Crosshair as CrosshairIcon, Flag, LogOut, Menu, RotateCcw, RotateCw, X, ZoomIn } from 'lucide-react';
 import type { GameView } from '../net/useGame.ts';
 import { useTicker } from '../net/useGame.ts';
-import { countTrigger, endGame, hitSender, respawn, sendKillcam, watchKillcam } from '../net/game.ts';
+import { countTrigger, endGame, hitSender, respawn, sendFlash, sendKillcam, watchKillcam } from '../net/game.ts';
 import { serverNow } from '../net/firebase.ts';
 import { keepAwake } from '../camera/camera.ts';
 import { peopleAI } from '../detect/people.ts';
-import { fire, type FireResult } from '../game/fire.ts';
-import { aimedAtPerson } from '../game/personHit.ts';
+import { fire, throwFlash, type FireResult } from '../game/fire.ts';
+import { aimedAtPerson, personInView } from '../game/personHit.ts';
+import { FLASH, FLASH_TOTAL_MS } from '../game/flash.ts';
 import { canRespawn, isProtected, respawnAt, type Life } from '../game/rules.ts';
 import { gun as gunById, gunDoc } from '../game/guns.ts';
 import { killFeed, scoreboard } from '../game/score.ts';
@@ -18,6 +19,7 @@ import { useSpaceTrigger, useWeapon } from '../ui/useWeapon.ts';
 import { load, save } from '../ui/storage.ts';
 import { go } from '../ui/router.ts';
 import { Crosshair, HitMarker, useDetectorState, formatClock } from '../ui/hud.tsx';
+import { FlashButton, ThrownFlashbang, Whiteout, useFlashbang } from '../ui/flashbang.tsx';
 
 export function Live({ code, g }: { code: string; g: GameView }) {
   const uid = g.uid!;
@@ -47,6 +49,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   const [overlay, setOverlay] = useState(() => load('debug') === '1');
   const [menu, setMenu] = useState(false);
   const [locked, setLocked] = useState(false);
+  const [inView, setInView] = useState(false);
   const [marker, setMarker] = useState<{ key: number; kill: boolean } | null>(null);
   const [flashKey, setFlashKey] = useState(0);
   const [hurt, setHurt] = useState<{ shotId: string; key: number } | null>(null);
@@ -70,13 +73,15 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     if (s === 0) sfx.go();
   }, [countdownMs]);
 
-  // Crosshair lock: would a shot count right now (a person under it, in range)?
+  // Crosshair lock: would a shot count right now (a person under it, in range)? And would a
+  // flashbang (anyone in view, in its range)?
   const frameZoom = scope.frameZoom;
   useEffect(() => {
     if (!rig) return;
     const id = setInterval(() => {
-      const vw = rig.video.videoWidth, vh = rig.video.videoHeight;
-      setLocked(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, performance.now(), { hitWidth: myGun.hitWidth, rangeM: myGun.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
+      setLocked(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: myGun.hitWidth, rangeM: myGun.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
   }, [rig, myGun, frameZoom]);
@@ -119,6 +124,26 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   });
   useSpaceTrigger(weapon);
 
+  // ---------- flashbang ----------
+  const flash = useFlashbang({
+    lastThrowAt: me?.lastFlashAt,
+    now: serverNow,
+    canThrow: () => !!rig && started && !!me?.life.alive,
+    onThrow: () => {
+      if (!rig) return;
+      const thrownAt = performance.now();
+      throwFlash({ pipeline: rig.pipeline, video: rig.video, frameZoom: scope.frameZoom })
+        .then(async (o) => {
+          const target = opponentId ? players.current[opponentId] : undefined;
+          const catchable = o.kind === 'hit' && !!opponentId && !!target && target.life.alive && !isProtected(target.life, rules, serverNow());
+          const caught = await sendFlash(code, uid, catchable ? { target: opponentId!, distanceM: o.distanceM } : null);
+          // The same hit marker as a shot, as it goes off.
+          if (caught) setTimeout(() => setMarker({ key: Date.now(), kill: false }), Math.max(0, FLASH.flightMs - (performance.now() - thrownAt)));
+        })
+        .catch(() => {});
+    },
+  });
+
   // Hear the other player's shots: their trigger count goes up with every shot they fire.
   const oppFired = opponentId ? g.players[opponentId]?.fired ?? 0 : 0;
   const heard = useRef<{ id: string | null; fired: number }>({ id: null, fired: 0 });
@@ -130,6 +155,40 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     const gap = oppGun.mode === 'burst' ? oppGun.burst!.gapMs : Math.min(oppGun.fireMs, 140);
     for (let i = 0; i < Math.min(oppFired - prev.fired, 6); i++) setTimeout(() => sfx.distantShot(oppGun.id), i * gap);
   }, [opponentId, oppFired, oppGun]);
+
+  // ---------- being flashed ----------
+  const [flashed, setFlashed] = useState<{ id: string; start: number; by: string } | null>(null);
+  const flashes = useRef(g.flashes);
+  flashes.current = g.flashes;
+  const seenFlash = useRef<string | null>(null);
+  useEffect(() => {
+    const latest = g.flashes.filter((f) => f.target === uid).at(-1);
+    if (!latest || latest.id === seenFlash.current) return;
+    seenFlash.current = latest.id;
+    // Only a fresh one: not one from earlier in the game, seen on reconnecting.
+    if (serverNow() - latest.at > FLASH.holdMs) return;
+    setFlashed({ id: latest.id, start: performance.now(), by: players.current[latest.by]?.name ?? 'Someone' });
+    sfx.flashed();
+    buzz([80, 40, 260]);
+  }, [g.flashes, uid]);
+  useEffect(() => {
+    if (!flashed) return;
+    const t = setTimeout(() => setFlashed(null), FLASH_TOTAL_MS);
+    return () => clearTimeout(t);
+  }, [flashed?.id]);
+
+  // Hear the other player's flashbang go off when it misses you (a catch plays the close bang).
+  const oppFlashAt = opponentId ? g.players[opponentId]?.lastFlashAt ?? 0 : 0;
+  const heardFlash = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
+  useEffect(() => {
+    const prev = heardFlash.current;
+    heardFlash.current = { id: opponentId, at: oppFlashAt };
+    if (prev.id !== opponentId || oppFlashAt <= prev.at) return;
+    // The catch record is written with the same timestamp; give it a moment to arrive.
+    setTimeout(() => {
+      if (!flashes.current.some((f) => f.by === opponentId && f.at === oppFlashAt)) sfx.flashBang();
+    }, 400);
+  }, [opponentId, oppFlashAt]);
 
   // ---------- being hit ----------
   const prevLife = useRef<Life | null>(null);
@@ -230,9 +289,11 @@ export function Live({ code, g }: { code: string; g: GameView }) {
           </div>
         )}
 
+        {flash.throws > 0 && <ThrownFlashbang key={flash.throws} />}
         <Gun gun={myGun.id} shots={weapon.shots} reloading={weapon.reloading} empty={weapon.ammo === 0} />
         <div className="hud-bottom">
           <div className="side-buttons">
+            <FlashButton f={flash} disabled={!me?.life.alive || !started} armed={inView} />
             <button
               className="hud-btn"
               aria-pressed={scope.scoped}
@@ -264,6 +325,8 @@ export function Live({ code, g }: { code: string; g: GameView }) {
           </button>
         </div>
       </div>
+
+      {flashed && <Whiteout key={flashed.id} start={flashed.start} by={flashed.by} />}
 
       {!started && (
         <div className="cover">
