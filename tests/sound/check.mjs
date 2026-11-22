@@ -6,6 +6,8 @@
 //   - each reload finishes inside that gun's reload time, ending on its last step
 //   - two gunshots are never identical, and a gun whose recording fails to load still fires
 //   - a headshot pings on top of the impact, and hits the victim harder
+//   - a grenade that catches you is as loud as a gunshot, one nearby is quieter, and its fuse
+//     beeps faster and faster before the blast
 //   - a flashbang that catches you is the loudest thing in the game, your ears ring, and
 //     everything else is muffled until the white fades; a thrown one bangs as it lands
 //   - audio starts on the first tap anywhere, and sounds asked for while audio is blocked
@@ -196,6 +198,23 @@ async function flashChecks() {
   };
 }
 
+/** Runs in the page: when each grenade fuse beep starts, in seconds. */
+async function fuseBeeps() {
+  const m = await import('/src/ui/sound.ts');
+  const b = await m.renderSound('grenadeFuse', 2.5);
+  const d = b.getChannelData(0), step = Math.round(b.sampleRate * 0.005);
+  const starts = [];
+  let on = false;
+  for (let i = 0; i + step <= d.length; i += step) {
+    let sum = 0;
+    for (let j = i; j < i + step; j++) sum += d[j] * d[j];
+    const loud = Math.sqrt(sum / step) > 0.01;
+    if (loud && !on) starts.push(i / b.sampleRate);
+    on = loud;
+  }
+  return starts;
+}
+
 function wav(base64, rate) {
   const data = Buffer.from(base64, 'base64');
   const h = Buffer.alloc(44);
@@ -257,8 +276,15 @@ async function main() {
     check(res.headshot.phoneDb > -24 && res.headshot.high350to750 < -60, `the headshot ping carries on a phone speaker and is short (${res.headshot.phoneDb.toFixed(1)} dB)`);
     check(res.hurtHead.phoneDb >= res.hurt.phoneDb - 1, `a headshot hits the victim at least as hard as a body hit (${res.hurtHead.phoneDb.toFixed(1)} vs ${res.hurt.phoneDb.toFixed(1)} dB)`);
 
-    console.log('Flashbangs');
+    console.log('Grenades');
     const loudestShot = Math.max(...guns.map((g) => res[`gunshot:${g.id}`].phoneDb));
+    check(res.grenadeHurt.phoneDb >= loudestShot - 1, `a grenade blast that catches you is as loud as the loudest gunshot (${res.grenadeHurt.phoneDb.toFixed(1)} dB)`);
+    check(res.grenadeHurt.phoneDb - res.grenadeBlast.phoneDb >= 4, `one going off nearby is clearly quieter (${(res.grenadeHurt.phoneDb - res.grenadeBlast.phoneDb).toFixed(1)} dB less)`);
+    const beeps = await page.evaluate(fuseBeeps);
+    const gaps = beeps.slice(1).map((t, i) => t - beeps[i]);
+    check(beeps.length === 7 && gaps.every((g, i) => i === 0 || g < gaps[i - 1]) && beeps.at(-1) < 1.5, `the fuse beeps 7 times, faster and faster, before the blast (${beeps.map((t) => t.toFixed(2)).join(' ')} s)`);
+
+    console.log('Flashbangs');
     check(res.flashed.phoneDb >= loudestShot - 1, `being caught by a flashbang is as loud as the loudest gunshot (${res.flashed.phoneDb.toFixed(1)} dB, loudest shot ${loudestShot.toFixed(1)} dB)`);
     check(res.flashed.phoneDb - res.flashBang.phoneDb >= 6, `one that misses you is clearly quieter (${(res.flashed.phoneDb - res.flashBang.phoneDb).toFixed(1)} dB less)`);
     for (let i = 0; i < 3; i++) {

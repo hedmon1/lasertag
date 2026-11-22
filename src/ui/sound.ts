@@ -17,6 +17,7 @@
 // installAudioUnlock() handles both, on the first tap anywhere in the app.
 import { GUNS, gun as gunById, type Gun, type GunId } from '../game/guns.ts';
 import { FLASH } from '../game/flash.ts';
+import { GRENADE } from '../game/grenade.ts';
 
 interface Chain {
   ctx: BaseAudioContext;
@@ -494,6 +495,27 @@ function bangFar(delay: number) {
   tone({ type: 'sine', from: 95, to: 38, ms: 320, gain: 0.45, delay });
 }
 
+/** Pulling the pin, the spoon flying off and the whoosh of the throw (flashbang or grenade). */
+function pinAndThrow() {
+  noise({ ms: 70, gain: 0.18, type: 'bandpass', from: 3800, to: 5200, q: 3 }); // pin sliding out
+  click(60, 4200, 0.45);
+  click(165, 3200, 0.4); // spoon released
+  tone({ type: 'triangle', from: 2900, to: 2500, ms: 140, gain: 0.12, delay: 170 });
+  tone({ type: 'sine', from: 4600, to: 4200, ms: 90, gain: 0.06, delay: 170 });
+  noise({ ms: 260, gain: 0.35, type: 'bandpass', from: 500, to: 1600, q: 1.2, delay: 230, attackMs: 120 }); // whoosh
+}
+
+/** A frag grenade going off: a crack, a deep boom rolling away, and debris raining down. */
+function explosion(level: number, delay = 0) {
+  noise({ ms: 10, gain: 1.2 * level, type: 'highpass', from: 1500, delay, attackMs: 0.3 }); // crack
+  noise({ ms: 750, gain: 1.7 * level, type: 'lowpass', from: vary(6000, 0.1), to: 110, q: 0.8, delay, reverb: 0.7, echo: 1 }); // boom
+  noise({ ms: 320, gain: 1.2 * level, type: 'bandpass', from: 1900, to: 500, q: 0.9, delay }); // punch, where a phone speaker is loudest
+  tone({ type: 'sine', from: 85, to: 28, ms: 600, gain: 1 * level, delay }); // thump
+  for (let i = 0; i < 9; i++) {
+    noise({ ms: 30, gain: (0.22 - i * 0.02) * level, type: 'bandpass', from: vary(2600, 0.3), q: 3, delay: delay + 260 + i * vary(70, 0.4) }); // debris
+  }
+}
+
 /**
  * Everything but the ringing goes muffled and a little quieter just after the bang, and clears
  * as the white fades: the filter opens up while the clear mix fades back in. The muffled side
@@ -614,13 +636,27 @@ const synth = {
   },
   /** Pulling the pin, the spoon flying off and the throw; the bang follows when it lands. */
   flashThrow() {
-    noise({ ms: 70, gain: 0.18, type: 'bandpass', from: 3800, to: 5200, q: 3 }); // pin sliding out
-    click(60, 4200, 0.45);
-    click(165, 3200, 0.4); // spoon released
-    tone({ type: 'triangle', from: 2900, to: 2500, ms: 140, gain: 0.12, delay: 170 });
-    tone({ type: 'sine', from: 4600, to: 4200, ms: 90, gain: 0.06, delay: 170 });
-    noise({ ms: 260, gain: 0.35, type: 'bandpass', from: 500, to: 1600, q: 1.2, delay: 230, attackMs: 120 }); // whoosh
+    pinAndThrow();
     bangFar(FLASH.flightMs);
+  },
+  /** Pulling the pin and throwing a grenade; it clinks down as it lands. The blast comes at the fuse. */
+  grenadeThrow() {
+    pinAndThrow();
+    click(GRENADE.flightMs, 1900, 0.35);
+    click(GRENADE.flightMs + 140, 2300, 0.2);
+  },
+  /** The other player threw one: fuse beeps, faster and faster until the blast. */
+  grenadeFuse() {
+    for (const at of GRENADE.beepsMs) tone({ type: 'square', from: 2200, ms: 45, gain: 0.11, delay: at, attackMs: 1 });
+  },
+  /** A grenade going off a few metres away: the thrower's own, or one that missed you. */
+  grenadeBlast() {
+    explosion(0.3);
+  },
+  /** Caught by the blast: right on top of you. */
+  grenadeHurt() {
+    explosion(1);
+    tone({ type: 'sine', from: 3300, to: 3280, ms: 700, gain: 0.04, delay: 120, attackMs: 40 }); // ears ringing
   },
   /** The other player's flashbang, when it missed you. */
   flashBang() {
@@ -677,6 +713,10 @@ export const sfx = {
   distantShot: (id: GunId) => play(`distantShot:${id}`),
   reload: (id: GunId) => play(`reload:${id}`),
   flashThrow: () => play('flashThrow'),
+  grenadeThrow: () => play('grenadeThrow'),
+  grenadeFuse: () => play('grenadeFuse'),
+  grenadeBlast: () => play('grenadeBlast'),
+  grenadeHurt: () => play('grenadeHurt'),
   flashBang: () => play('flashBang'),
   flashed: () => play('flashed'),
   /** Only some misses whine off something. */

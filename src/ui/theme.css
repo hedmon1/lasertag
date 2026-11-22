@@ -724,14 +724,18 @@ table.score tr.me td { color: var(--lime); }
 .hud-btn[aria-pressed='true'] { background-color: var(--cyan); color: var(--ink); transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--ink); }
 .hud-btn[aria-pressed='true'] svg { color: var(--ink); }
 
-/* ---------- flashbang ---------- */
-.flash-btn svg { width: 20px; height: 24px; color: var(--yellow); }
-.flash-btn.armed svg { color: var(--ink); }
+/* ---------- throwables: flashbang and grenade ---------- */
+/* Side by side above Scope and Reload, so the column doesn't grow. */
+.throw-row { display: flex; gap: 10px; }
+.throw-row .hud-btn { min-width: 76px; }
+.throw-btn svg { width: 20px; height: 24px; color: var(--yellow); }
+.throw-btn.armed svg { color: var(--ink); }
 .thrown { color: var(--yellow); }
-.flash-btn .num { font: 18px/1 var(--term); letter-spacing: 0; }
-.flash-btn:disabled svg { opacity: 0.45; }
-/* Someone in range and the flashbang is ready. */
+.throw-btn .num { font: 18px/1 var(--term); letter-spacing: 0; }
+.throw-btn:disabled svg { opacity: 0.45; }
+/* Someone in range and it's ready. */
 .flash-btn.armed { background-color: var(--yellow); color: var(--ink); }
+.frag-btn.armed { background-color: var(--red); color: var(--ink); }
 .throw { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .thrown {
   position: absolute;
@@ -750,6 +754,45 @@ table.score tr.me td { color: var(--lime); }
   100% { transform: translate(0, 0) scale(0.3); opacity: 0; }
 }
 @keyframes tumble { to { transform: rotate(900deg); } }
+/* A grenade lands and sits there blinking until its fuse runs out. */
+.thrown.frag { animation: throw-frag var(--flight) steps(10) forwards, gone 1ms linear var(--fuse) forwards; }
+.thrown.frag svg { animation: tumble var(--flight) steps(10) forwards, blink 240ms steps(1) var(--flight) infinite; }
+@keyframes blink { 50% { opacity: 0.35; } }
+@keyframes throw-frag {
+  0% { transform: translate(-22vw, 30vh) scale(1.5); }
+  45% { transform: translate(-12vw, -9vh) scale(0.95); }
+  100% { transform: translate(0, 0) scale(0.45); }
+}
+@keyframes gone { to { opacity: 0; } }
+/* Its blast, orange and red, where it landed. */
+.blast {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 244, 190, 1), rgba(255, 150, 40, 0.95) 6%, rgba(255, 77, 77, 0.6) 14%, rgba(255, 77, 77, 0) 30%);
+  animation: fade 560ms steps(7) var(--fuse) forwards;
+}
+/* The other player threw one: blinks with every fuse beep. */
+.grenade-warning {
+  position: absolute;
+  left: 50%;
+  top: calc(150px + var(--safe-top));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 12px/1 var(--pixel);
+  text-transform: uppercase;
+  color: var(--red);
+  background: var(--shade);
+  border: 3px solid var(--ink);
+  box-shadow: var(--sh-sm);
+  padding: 7px 12px 6px;
+  pointer-events: none;
+}
+.grenade-warning svg { width: 15px; height: 18px; color: var(--red); }
+.grenade-warning.lit { background: var(--red); color: var(--ink); }
+.grenade-warning.lit svg { color: var(--ink); }
 /* Where it landed, seen from afar. */
 .flash-pop {
   position: absolute;
@@ -994,5 +1037,6 @@ table.score tr.me td { color: var(--lime); }
 
 @media (prefers-reduced-motion: reduce) {
   .thrown { display: none; }
+  .stage { animation: none !important; }
   .gun *, .gun-preview, .preview-flash, .tracer, .stars, .grid-floor, .crt-beam, .bulbs, .attract, .attract *, .deck *, .ticker-track, .blink-dot { animation: none !important; }
 }

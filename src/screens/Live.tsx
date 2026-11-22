@@ -2,13 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Crosshair as CrosshairIcon, Flag, LogOut, Menu, RotateCcw, RotateCw, X, ZoomIn } from 'lucide-react';
 import type { GameView } from '../net/useGame.ts';
 import { useTicker } from '../net/useGame.ts';
-import { countTrigger, endGame, hitSender, respawn, sendFlash, sendKillcam, watchKillcam } from '../net/game.ts';
+import { countTrigger, endGame, hitSender, respawn, sendFlash, sendGrenadeHit, sendKillcam, throwGrenade, watchKillcam, type ShotRecord } from '../net/game.ts';
 import { serverNow } from '../net/firebase.ts';
 import { keepAwake } from '../camera/camera.ts';
 import { peopleAI } from '../detect/people.ts';
-import { fire, throwFlash, type FireResult } from '../game/fire.ts';
+import { blast, fire, throwFlash, type FireResult } from '../game/fire.ts';
 import { aimedAtPerson, personInView, type AimLock } from '../game/personHit.ts';
 import { FLASH, FLASH_TOTAL_MS } from '../game/flash.ts';
+import { GRENADE } from '../game/grenade.ts';
 import { canRespawn, isProtected, respawnAt, type Life } from '../game/rules.ts';
 import { gun as gunById, gunDoc } from '../game/guns.ts';
 import { killFeed, scoreboard } from '../game/score.ts';
@@ -20,6 +21,14 @@ import { load, save } from '../ui/storage.ts';
 import { go } from '../ui/router.ts';
 import { AimTag, Crosshair, HitMarker, useDetectorState, formatClock } from '../ui/hud.tsx';
 import { FlashButton, ThrownFlashbang, Whiteout, useFlashbang } from '../ui/flashbang.tsx';
+import { GrenadeButton, GrenadeWarning, ThrownGrenade, useGrenade } from '../ui/throwables.tsx';
+
+/** What a shot was fired with, for the messages: the gun's name, or Grenade. */
+function weaponName(s?: ShotRecord): string | null {
+  if (!s) return null;
+  if (s.via === 'grenade') return 'Grenade';
+  return s.gun ? gunById(s.gun).name : null;
+}
 
 export function Live({ code, g }: { code: string; g: GameView }) {
   const uid = g.uid!;
@@ -50,6 +59,8 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   const [menu, setMenu] = useState(false);
   const [lock, setLock] = useState<AimLock>(false);
   const [inView, setInView] = useState(false);
+  const [inBlastRange, setInBlastRange] = useState(false);
+  const [shake, setShake] = useState(0);
   const [marker, setMarker] = useState<{ key: number; kill: boolean; head?: boolean } | null>(null);
   const [flashKey, setFlashKey] = useState(0);
   const [hurt, setHurt] = useState<{ shotId: string; key: number } | null>(null);
@@ -82,6 +93,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
       const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
       setLock(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: myGun.hitWidth, rangeM: myGun.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
       setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setInBlastRange(personInView(rig.pipeline.frames, t, { rangeM: GRENADE.far.m, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
   }, [rig, myGun, frameZoom]);
@@ -145,6 +157,36 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     },
   });
 
+  // ---------- grenade ----------
+  // The throw stamps the database (the other phone starts beeping). When the fuse runs out,
+  // the AI checks who is in view right then, and the blast's damage goes in as a shot.
+  const grenade = useGrenade({
+    lastThrowAt: me?.lastGrenadeAt,
+    now: serverNow,
+    canThrow: () => !!rig && started && !!me?.life.alive,
+    onThrow: () => {
+      const stamp = throwGrenade(code, uid).catch(() => 0);
+      setTimeout(async () => {
+        sfx.grenadeBlast();
+        if (!rig) return;
+        const thrownAt = await stamp;
+        const res = await blast({ pipeline: rig.pipeline, video: rig.video, frameZoom: scope.frameZoom });
+        const o = res.outcome;
+        const target = opponentId ? players.current[opponentId] : undefined;
+        if (!thrownAt || o.kind !== 'hit' || !opponentId || !target || !target.life.alive || isProtected(target.life, rules, serverNow())) return;
+        const r = await sendGrenadeHit(code, uid, { target: opponentId, distanceM: o.distanceM }, target.life, thrownAt, rules);
+        if (!r.ok) return;
+        setMarker({ key: Date.now(), kill: r.kill });
+        sfx.impact();
+        if (r.kill) {
+          sfx.kill();
+          const jpg = res.killcam();
+          if (jpg) sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
+        }
+      }, GRENADE.fuseMs);
+    },
+  });
+
   // Hear the other player's shots: their trigger count goes up with every shot they fire.
   const oppFired = opponentId ? g.players[opponentId]?.fired ?? 0 : 0;
   const heard = useRef<{ id: string | null; fired: number }>({ id: null, fired: 0 });
@@ -196,16 +238,51 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   // headshot sounds like one.
   const shotsNow = useRef(g.shots);
   shotsNow.current = g.shots;
-  function hurtSound(shotId: string) {
-    const play = (head: boolean) => {
-      if (head) sfx.hurtHead();
-      else sfx.hurt();
-      buzz(head ? [60, 30, 120] : 90);
+  function hurtSound(shotId: string, alive: boolean) {
+    const play = (shot?: ShotRecord) => {
+      if (shot?.via === 'grenade') {
+        sfx.grenadeHurt();
+        setShake((n) => n + 1);
+      }
+      if (!alive) {
+        sfx.eliminated();
+        buzz([220, 80, 220]);
+      } else if (shot?.via === 'grenade') {
+        buzz([140, 40, 180]);
+      } else if (shot?.head) {
+        sfx.hurtHead();
+        buzz([60, 30, 120]);
+      } else {
+        sfx.hurt();
+        buzz(90);
+      }
     };
     const known = shotsNow.current.find((s) => s.id === shotId);
-    if (known) play(!!known.head);
-    else setTimeout(() => play(!!shotsNow.current.find((s) => s.id === shotId)?.head), 150);
+    if (known) play(known);
+    else setTimeout(() => play(shotsNow.current.find((s) => s.id === shotId)), 150);
   }
+
+  // ---------- the other player's grenade ----------
+  // Their throw stamps the database: the fuse beeps here, faster and faster, with a warning on
+  // screen. If the blast doesn't catch you, you hear it go off nearby.
+  const [warning, setWarning] = useState<number | null>(null);
+  const oppGrenadeAt = opponentId ? g.players[opponentId]?.lastGrenadeAt ?? 0 : 0;
+  const heardGrenade = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
+  useEffect(() => {
+    const prev = heardGrenade.current;
+    heardGrenade.current = { id: opponentId, at: oppGrenadeAt };
+    if (prev.id !== opponentId || oppGrenadeAt <= prev.at) return;
+    const age = Math.max(0, serverNow() - oppGrenadeAt);
+    if (age > GRENADE.fuseMs) return; // late news (reconnecting): it already went off
+    const start = performance.now() - age;
+    setWarning(start);
+    sfx.grenadeFuse();
+    setTimeout(() => setWarning((w) => (w === start ? null : w)), GRENADE.fuseMs - age + 200);
+    const thrownAt = oppGrenadeAt, by = opponentId;
+    setTimeout(() => {
+      if (!shotsNow.current.some((s) => s.via === 'grenade' && s.by === by && s.target === uid && s.at >= thrownAt)) sfx.grenadeBlast();
+    }, GRENADE.fuseMs - age + 700);
+  }, [opponentId, oppGrenadeAt]);
 
   const prevLife = useRef<Life | null>(null);
   useEffect(() => {
@@ -217,12 +294,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
     if (l.shot && l.hp < prev.hp) {
       setFlashKey((k) => k + 1);
       setHurt({ shotId: l.shot, key: Date.now() });
-      if (l.alive) {
-        hurtSound(l.shot);
-      } else {
-        sfx.eliminated();
-        buzz([220, 80, 220]);
-      }
+      hurtSound(l.shot, l.alive);
     } else if (l.alive && !prev.alive) {
       sfx.respawn();
       weapon.refill();
@@ -231,7 +303,7 @@ export function Live({ code, g }: { code: string; g: GameView }) {
 
   const hurtShot = hurt ? g.shots.find((s) => s.id === hurt.shotId) : undefined;
   const hurtBy = hurtShot ? players.current[hurtShot.by]?.name ?? 'Someone' : null;
-  const hurtGun = hurtShot?.gun ? gunById(hurtShot.gun).name : null;
+  const hurtGun = weaponName(hurtShot);
   const showHurt = hurt && hurtShot && Date.now() - hurt.key < 2600 && me?.life.alive;
 
   // Respawn automatically once the timer runs out.
@@ -263,13 +335,13 @@ export function Live({ code, g }: { code: string; g: GameView }) {
   const prot = me ? isProtected(me.life, rules, now) : false;
   const deathShotRec = deathShot ? g.shots.find((s) => s.id === deathShot) : undefined;
   const killer = deathShotRec ? players.current[deathShotRec.by]?.name : undefined;
-  const killerGun = deathShotRec?.gun ? gunById(deathShotRec.gun).name : null;
+  const killerGun = weaponName(deathShotRec);
   const away = deathShotRec && deathShotRec.dist > 0 ? `about ${Math.round(deathShotRec.dist)} m away` : '';
   const how = killerGun ? `${killerGun}${deathShotRec?.head ? ' headshot' : ''}` : deathShotRec?.head ? 'Headshot' : '';
   const deathLine = how ? [how, away].filter(Boolean).join(', ') : away.replace(/^a/, 'A');
 
   return (
-    <CameraView videoRef={videoRef} rig={rig} viewZoom={scope.viewZoom} frameZoom={scope.frameZoom} overlay={overlay}>
+    <CameraView videoRef={videoRef} rig={rig} viewZoom={scope.viewZoom} frameZoom={scope.frameZoom} overlay={overlay} shake={shake}>
       {flashKey > 0 && <div key={flashKey} className="flash" />}
       <div className="hud">
         <div className="hud-top">
@@ -301,15 +373,21 @@ export function Live({ code, g }: { code: string; g: GameView }) {
         {marker && <HitMarker key={`marker-${marker.key}`} kill={marker.kill} head={marker.head} />}
         {showHurt && (
           <div className="toast bad" style={{ top: 'calc(96px + var(--safe-top))' }}>
-            {hurtShot!.head ? 'Headshot by' : 'Hit by'} {hurtBy}{hurtGun ? `'s ${hurtGun}` : ''}{hurtShot!.dist > 0 ? `. ${Math.round(hurtShot!.dist)} m` : ''}
+            {hurtShot!.via === 'grenade' ? `Grenade from ${hurtBy}` : `${hurtShot!.head ? 'Headshot by' : 'Hit by'} ${hurtBy}${hurtGun ? `'s ${hurtGun}` : ''}`}
+            {hurtShot!.dist > 0 ? `. ${Math.round(hurtShot!.dist)} m` : ''}
           </div>
         )}
 
         {flash.throws > 0 && <ThrownFlashbang key={flash.throws} />}
+        {grenade.throws > 0 && <ThrownGrenade key={`g${grenade.throws}`} />}
+        {warning !== null && <GrenadeWarning start={warning} />}
         <Gun gun={myGun.id} shots={weapon.shots} reloading={weapon.reloading} empty={weapon.ammo === 0} />
         <div className="hud-bottom">
           <div className="side-buttons">
-            <FlashButton f={flash} disabled={!me?.life.alive || !started} armed={inView} />
+            <div className="throw-row">
+              <GrenadeButton t={grenade} disabled={!me?.life.alive || !started} armed={inBlastRange} />
+              <FlashButton f={flash} disabled={!me?.life.alive || !started} armed={inView} />
+            </div>
             <button
               className="hud-btn"
               aria-pressed={scope.scoped}

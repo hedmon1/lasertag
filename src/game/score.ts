@@ -2,8 +2,9 @@ export interface ShotRecord {
   id: string;
   by: string;
   target: string;
-  via: 'ai';
-  /** The shooter's gun (GunId); missing on shots from before the Armory. */
+  /** 'ai': a gun shot the AI saw land. 'grenade': a grenade's blast. */
+  via: 'ai' | 'grenade';
+  /** The shooter's gun (GunId), or 'grenade'; missing on shots from before the Armory. */
   gun?: string;
   dist: number;
   at: number;

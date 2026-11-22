@@ -2,7 +2,8 @@
 import type { PeoplePipeline } from '../detect/peoplePipeline.ts';
 import { SHOT_WINDOW_AFTER_MS } from './constants.ts';
 import { FLASH } from './flash.ts';
-import { resolveFlash, resolveShot, type PeopleFrame, type ShotOutcome } from './personHit.ts';
+import { GRENADE } from './grenade.ts';
+import { resolveBlast, resolveFlash, resolveShot, type PeopleFrame, type ShotOutcome } from './personHit.ts';
 
 export interface FireOptions {
   pipeline: PeoplePipeline;
@@ -34,29 +35,29 @@ async function framesAround(pipeline: PeoplePipeline, time: number): Promise<Peo
   return [...before, ...pipeline.frames.filter((f) => !before.includes(f))];
 }
 
-export async function fire(o: FireOptions): Promise<FireResult> {
-  const fireTime = performance.now();
-  const vw = o.video.videoWidth, vh = o.video.videoHeight;
-
-  // Kill cam: grab the crosshair area now, encode only if the shot eliminates someone.
+/** Kill cam: grabs the middle of the view now; encodes it only if asked (the shot eliminated someone). */
+function grabKillcam(video: HTMLVideoElement): () => string | null {
+  const vw = video.videoWidth, vh = video.videoHeight;
   const cam = document.createElement('canvas');
   cam.width = cam.height = KILLCAM_PX;
   const crop = Math.round(Math.min(vw, vh) * 0.6);
-  cam.getContext('2d')?.drawImage(o.video, (vw - crop) / 2, (vh - crop) / 2, crop, crop, 0, 0, KILLCAM_PX, KILLCAM_PX);
+  cam.getContext('2d')?.drawImage(video, (vw - crop) / 2, (vh - crop) / 2, crop, crop, 0, 0, KILLCAM_PX, KILLCAM_PX);
+  return () => {
+    try {
+      return cam.toDataURL('image/jpeg', 0.62);
+    } catch {
+      return null;
+    }
+  };
+}
 
+export async function fire(o: FireOptions): Promise<FireResult> {
+  const fireTime = performance.now();
+  const vw = o.video.videoWidth, vh = o.video.videoHeight;
+  const killcam = grabKillcam(o.video);
   const frames = await framesAround(o.pipeline, fireTime);
   const outcome = resolveShot({ aim: { x: vw / 2, y: vh / 2 }, fireTime, frames, frameWidth: vw, frameHeight: vh, zoom: o.frameZoom, hitWidth: o.hitWidth, rangeM: o.rangeM });
-  return {
-    outcome,
-    fireTime,
-    killcam: () => {
-      try {
-        return cam.toDataURL('image/jpeg', 0.62);
-      } catch {
-        return null;
-      }
-    },
-  };
+  return { outcome, fireTime, killcam };
 }
 
 /** A flashbang: did it catch anyone in view? */
@@ -64,4 +65,13 @@ export async function throwFlash(o: Pick<FireOptions, 'pipeline' | 'video' | 'fr
   const throwTime = performance.now();
   const frames = await framesAround(o.pipeline, throwTime);
   return resolveFlash({ throwTime, frames, frameWidth: o.video.videoWidth, frameHeight: o.video.videoHeight, zoom: o.frameZoom, rangeM: FLASH.rangeM });
+}
+
+/** A grenade going off now: did the blast catch anyone in view? */
+export async function blast(o: Pick<FireOptions, 'pipeline' | 'video' | 'frameZoom'>): Promise<FireResult> {
+  const fireTime = performance.now();
+  const killcam = grabKillcam(o.video);
+  const frames = await framesAround(o.pipeline, fireTime);
+  const outcome = resolveBlast({ throwTime: fireTime, frames, frameWidth: o.video.videoWidth, frameHeight: o.video.videoHeight, zoom: o.frameZoom, rangeM: GRENADE.far.m });
+  return { outcome, fireTime, killcam };
 }

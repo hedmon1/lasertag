@@ -1,7 +1,8 @@
 // The flashbang on screen: its button, the throw, and the white screen when one catches you.
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { FLASH, flashReadyIn, flashWhiteness } from '../game/flash.ts';
+import { useEffect, useRef } from 'react';
+import { FLASH, flashWhiteness } from '../game/flash.ts';
 import { sfx } from './sound.ts';
+import { ThrowButton, Thrown, useThrowable, type Throwable } from './throwables.tsx';
 
 /**
  * A pixel flashbang on a 10 x 12 grid, drawn at whole multiples so every pixel stays sharp: pale
@@ -32,83 +33,19 @@ export function FlashbangIcon({ className }: { className?: string }) {
   );
 }
 
-export interface Flashbang {
-  /** Milliseconds until it's back; 0 when ready. */
-  readyIn: number;
-  /** Goes up with every throw, to replay the throw on screen. */
-  throws: number;
-  throwIt: () => void;
-}
-
-/**
- * The thrower's side: the recharge, the throw sound and the F key. `lastThrowAt` is the
- * database's record of your last throw (Live); `now` is the clock it is in.
- */
-export function useFlashbang(o: { canThrow: () => boolean; onThrow: () => void; now: () => number; lastThrowAt?: number }): Flashbang {
-  const [localAt, setLocalAt] = useState(0);
-  const [throws, setThrows] = useState(0);
-  const [, tick] = useState(0);
-  const readyIn = flashReadyIn(Math.max(localAt, o.lastThrowAt ?? 0), o.now());
-
-  // Count down while it recharges.
-  useEffect(() => {
-    if (readyIn <= 0) return;
-    const id = setInterval(() => tick((n) => n + 1), 250);
-    return () => clearInterval(id);
-  }, [readyIn > 0]);
-
-  const latest = useRef({ o, readyIn });
-  latest.current = { o, readyIn };
-  const throwIt = useRef(() => {
-    const { o, readyIn } = latest.current;
-    if (readyIn > 0 || !o.canThrow()) return;
-    setLocalAt(o.now());
-    setThrows((n) => n + 1);
-    sfx.flashThrow();
-    o.onThrow();
-  }).current;
-
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.code !== 'KeyF' || e.repeat || e.metaKey || e.ctrlKey || (e.target as HTMLElement)?.closest?.('input, textarea')) return;
-      e.preventDefault();
-      throwIt();
-    };
-    window.addEventListener('keydown', down);
-    return () => window.removeEventListener('keydown', down);
-  }, [throwIt]);
-
-  return { readyIn, throws, throwIt };
+/** The flashbang's throw: the F key, the pin and the bang, recharging after every throw. */
+export function useFlashbang(o: { canThrow: () => boolean; onThrow: () => void; now: () => number; lastThrowAt?: number }): Throwable {
+  return useThrowable({ ...o, cooldownMs: FLASH.cooldownMs, key: 'KeyF', sound: sfx.flashThrow });
 }
 
 /** The Flash button: shows the seconds left while it recharges, and lights up with someone in range. */
-export function FlashButton({ f, disabled, armed }: { f: Flashbang; disabled: boolean; armed: boolean }) {
-  const s = Math.ceil(f.readyIn / 1000);
-  return (
-    <button
-      className={`hud-btn flash-btn${armed && f.readyIn === 0 && !disabled ? ' armed' : ''}`}
-      data-testid="flash"
-      disabled={disabled || f.readyIn > 0}
-      aria-label={f.readyIn > 0 ? `Flashbang back in ${s} seconds` : 'Throw flashbang'}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        f.throwIt();
-      }}
-    >
-      <FlashbangIcon />
-      {f.readyIn > 0 ? <span className="num">{s} S</span> : 'FLASH'}
-    </button>
-  );
+export function FlashButton({ f, disabled, armed }: { f: Throwable; disabled: boolean; armed: boolean }) {
+  return <ThrowButton t={f} disabled={disabled} armed={armed} icon={<FlashbangIcon />} label="FLASH" name="flashbang" className="flash-btn" testId="flash" />;
 }
 
 /** The throw: the flashbang tumbles out from the lower left into the view, then pops where it lands. */
 export function ThrownFlashbang() {
-  return (
-    <div className="throw" style={{ '--flight': `${FLASH.flightMs}ms` } as CSSProperties} aria-hidden>
-      <div className="thrown"><FlashbangIcon /></div>
-      <div className="flash-pop" />
-    </div>
-  );
+  return <Thrown icon={<FlashbangIcon />} kind="flash" flightMs={FLASH.flightMs} />;
 }
 
 /** Caught: the screen is pure white, then fades as your eyes recover. Taps still go through. */

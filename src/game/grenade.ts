@@ -15,6 +15,10 @@ export const GRENADE = {
   far: { m: 12, damage: 35 },
   /** The database accepts the hit only this long after the throw: the fuse, give or take lag. */
   hitWindowMs: { from: 1000, to: 4000 },
+  /** When the fuse beeps on the other phone, faster and faster until the blast. */
+  beepsMs: [0, 380, 700, 960, 1160, 1310, 1420],
+  /** From the throw to it landing, on the thrower's screen. */
+  flightMs: 600,
 };
 
 /** Damage at a distance, or null when it's out of reach. Null distance means too close to measure. */

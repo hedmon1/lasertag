@@ -72,9 +72,20 @@ export function CameraView(props: {
   viewZoom: number;
   frameZoom?: number;
   overlay: boolean;
+  /** Goes up by one to shake the view (a grenade blast). */
+  shake?: number;
   children?: ReactNode;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!props.shake || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    stageRef.current?.animate(
+      [0, 1, 2, 3, 4, 5, 6].map((i) => ({ transform: i === 6 ? 'none' : `translate(${(i % 2 ? -1 : 1) * (12 - i * 2)}px, ${(i % 3 - 1) * (10 - i * 1.5)}px)` })),
+      { duration: 420, easing: 'steps(7)' },
+    );
+  }, [props.shake]);
   const live = useRef(props);
   live.current = props;
 
@@ -104,7 +115,7 @@ export function CameraView(props: {
   }, [props.overlay]);
 
   return (
-    <div className="stage">
+    <div className="stage" ref={stageRef}>
       <video
         ref={props.videoRef}
         className="stage-video"

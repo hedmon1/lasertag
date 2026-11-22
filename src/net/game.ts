@@ -7,6 +7,7 @@ import { database, serverNow } from './firebase.ts';
 import { DEFAULT_RULES, freshLife, lifeAfterHit, shotDamage, type GameRules, type Life } from '../game/rules.ts';
 import { gunDoc, type GunDoc, type GunId } from '../game/guns.ts';
 import { FLASH } from '../game/flash.ts';
+import { grenadeDamage } from '../game/grenade.ts';
 import type { ShotRecord } from '../game/score.ts';
 
 export type GameState = 'lobby' | 'live' | 'ended';
@@ -253,6 +254,44 @@ export async function sendFlash(code: string, me: string, caught: { target: stri
   }
   await update(gameRef(code), stamp).catch(() => {});
   return false;
+}
+
+/** Throws your grenade: stamps the throw, which the other phone hears. Returns the server's time for it. */
+export async function throwGrenade(code: string, me: string): Promise<number> {
+  const r = gameRef(code, `players/${me}/lastGrenadeAt`);
+  await set(r, serverTimestamp());
+  return (await get(r)).val() as number;
+}
+
+/**
+ * Your grenade (thrown at `thrownAt`, the server's time) caught the other player. Damage by
+ * the distance sent, so it always matches what the database works out. Retries once on stale
+ * health, like a shot.
+ */
+export async function sendGrenadeHit(code: string, me: string, req: HitRequest, known: Life, thrownAt: number, rules: GameRules): Promise<HitResult> {
+  const dist = req.distanceM === null ? 0 : Math.max(0, Math.round(req.distanceM * 10) / 10);
+  const damage = grenadeDamage(dist || null);
+  if (damage === null) return { ok: false, reason: 'rejected' };
+  let life = known;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!life.alive) return { ok: false, reason: 'down' };
+    if (life.spawnAt > 0 && serverNow() < life.spawnAt + rules.protectMs) return { ok: false, reason: 'protected' };
+    const shotId = push(gameRef(code, 'shots')).key!;
+    const next = lifeAfterHit(life, damage, shotId, Date.now());
+    try {
+      await update(gameRef(code), {
+        [`shots/${shotId}`]: { by: me, target: req.target, via: 'grenade', gun: 'grenade', dist, at: serverTimestamp(), kill: !next.alive },
+        [`players/${req.target}/life`]: { ...next, diedAt: next.alive ? 0 : serverTimestamp() },
+        [`players/${me}/grenadeHitOf`]: thrownAt,
+      });
+      return { ok: true, shotId, kill: !next.alive };
+    } catch {
+      const fresh = await get(gameRef(code, `players/${req.target}/life`));
+      if (!fresh.exists() || (fresh.val() as Life).seq === life.seq) return { ok: false, reason: 'rejected' };
+      life = fresh.val() as Life;
+    }
+  }
+  return { ok: false, reason: life.alive ? 'rejected' : 'down' };
 }
 
 export async function countTrigger(code: string, me: string) {

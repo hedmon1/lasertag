@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Crosshair as CrosshairIcon, Eye, EyeOff, RotateCcw, RotateCw, Swords, ZoomIn } from 'lucide-react';
 import { peopleAI } from '../detect/people.ts';
-import { fire, throwFlash } from '../game/fire.ts';
+import { blast, fire, throwFlash } from '../game/fire.ts';
 import { aimedAtPerson, personInView, type AimLock } from '../game/personHit.ts';
 import { FLASH } from '../game/flash.ts';
+import { GRENADE, grenadeDamage } from '../game/grenade.ts';
 import { gun as gunById } from '../game/guns.ts';
 import { CameraView, useCameraRig, useScope } from '../ui/CameraView.tsx';
 import { AimTag, Crosshair, HitMarker, useDetectorState } from '../ui/hud.tsx';
@@ -14,6 +15,7 @@ import { savedGun } from '../ui/loadout.ts';
 import { useSpaceTrigger, useWeapon } from '../ui/useWeapon.ts';
 import { keepAwake } from '../camera/camera.ts';
 import { FlashButton, ThrownFlashbang, useFlashbang } from '../ui/flashbang.tsx';
+import { GrenadeButton, ThrownGrenade, useGrenade } from '../ui/throwables.tsx';
 
 interface LogEntry {
   key: number;
@@ -29,6 +31,7 @@ export function Practice() {
   const [overlay, setOverlay] = useState(() => load('practice.debug', '1') === '1');
   const [lock, setLock] = useState<AimLock>(false);
   const [inView, setInView] = useState(false);
+  const [inBlastRange, setInBlastRange] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [marker, setMarker] = useState<{ key: number; head: boolean } | null>(null);
   const [hits, setHits] = useState({ hits: 0, shots: 0 });
@@ -45,6 +48,7 @@ export function Practice() {
       const vw = rig.video.videoWidth, vh = rig.video.videoHeight, t = performance.now();
       setLock(aimedAtPerson(rig.pipeline.frames, { x: vw / 2, y: vh / 2 }, t, { hitWidth: g.hitWidth, rangeM: g.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
       setInView(personInView(rig.pipeline.frames, t, { rangeM: FLASH.rangeM, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
+      setInBlastRange(personInView(rig.pipeline.frames, t, { rangeM: GRENADE.far.m, frameWidth: vw, frameHeight: vh, zoom: frameZoom }));
     }, 100);
     return () => clearInterval(id);
   }, [rig, g, frameZoom]);
@@ -68,6 +72,22 @@ export function Practice() {
     },
   });
   useSpaceTrigger(weapon);
+
+  const grenade = useGrenade({
+    now: Date.now,
+    canThrow: () => !!rig,
+    onThrow: () => {
+      setTimeout(async () => {
+        sfx.grenadeBlast();
+        if (!rig) return;
+        const { outcome: o } = await blast({ pipeline: rig.pipeline, video: rig.video, frameZoom: scope.frameZoom });
+        const dmg = o.kind === 'hit' ? grenadeDamage(o.distanceM) : null;
+        if (dmg) setMarker({ key: Date.now(), head: false });
+        const d = o.kind === 'hit' && o.distanceM ? ` · ${o.distanceM.toFixed(1)} m` : '';
+        setLog((l) => [{ key: performance.now(), text: dmg ? `GRENADE ${dmg}${d}` : 'GRENADE MISSED' }, ...l].slice(0, 5));
+      }, GRENADE.fuseMs);
+    },
+  });
 
   const flash = useFlashbang({
     now: Date.now,
@@ -98,16 +118,20 @@ export function Practice() {
           <div>
             AI <b>{detector === 'ready' ? `ready (${peopleAI.delegate})` : detector}</b> · {hits.hits} / {hits.shots} hits
           </div>
-          {log.length === 0 ? <div className="muted">Aim at a person and fire, or throw a flashbang. Results appear here.</div> : log.map((l) => <div key={l.key}>{l.text}</div>)}
+          {log.length === 0 ? <div className="muted">Aim at a person and fire, or throw a grenade or flashbang. Results appear here.</div> : log.map((l) => <div key={l.key}>{l.text}</div>)}
         </div>
         <Crosshair lock={lock} />
         <AimTag lock={lock} name="Person" />
         {marker && <HitMarker key={`marker-${marker.key}`} kill={false} head={marker.head} />}
         {flash.throws > 0 && <ThrownFlashbang key={flash.throws} />}
+        {grenade.throws > 0 && <ThrownGrenade key={`g${grenade.throws}`} />}
         <Gun gun={g.id} shots={weapon.shots} reloading={weapon.reloading} empty={weapon.ammo === 0} />
         <div className="hud-bottom">
           <div className="side-buttons">
-            <FlashButton f={flash} disabled={!rig} armed={inView} />
+            <div className="throw-row">
+              <GrenadeButton t={grenade} disabled={!rig} armed={inBlastRange} />
+              <FlashButton f={flash} disabled={!rig} armed={inView} />
+            </div>
             <button
               className="hud-btn"
               aria-pressed={scope.scoped}
