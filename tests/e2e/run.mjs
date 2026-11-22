@@ -6,7 +6,11 @@
 //   Bob fires and misses. Bob throws a flashbang at an empty room; Ann throws one and Bob's
 //   screen goes white until it wears off. Ann fires her pistol four times: Bob sees each hit, then the
 //   elimination screen with a kill cam, then respawns. Ann ends the game and both see the
-//   scoreboard. In a second round Ann takes the SMG and holds Fire until Bob is out.
+//   scoreboard. In a second round Ann takes the SMG and holds Fire until Bob is out. Bob
+//   respawns and throws a grenade at an empty room (Ann gets the warning, nothing else); Ann
+//   throws one at Bob, who gets the warning, then takes 60. The scoreboard shows it.
+//   A second match with fresh players: Ann's camera films Bob further back with the crosshair on
+//   his head, and two pistol headshots take him out.
 //
 // Run with `npm run test:e2e` (starts the Auth and Database emulators around this script).
 import { spawn } from 'node:child_process';
@@ -87,13 +91,43 @@ async function pickGun(page, name) {
   await page.getByText('Lobby').waitFor({ timeout: 8000 });
 }
 
+/** Ann creates a game, Bob joins, the respawn time is 5 s, and the countdown runs out. */
+async function startMatch(A, B) {
+  await A.goto(`${APP}#/`);
+  await A.getByLabel('Your name').fill('Ann');
+  await A.getByRole('button', { name: 'Create game' }).click();
+  await A.waitForURL(/#\/g\/[A-Z]{4}$/, { timeout: 15000 });
+  const code = A.url().split('/').pop();
+  await A.getByRole('group', { name: 'Respawn time' }).getByRole('button', { name: '5 s' }).click();
+  await B.goto(`${APP}#/`);
+  await B.getByLabel('Your name').fill('Bob');
+  await B.getByLabel('Game code').fill(code);
+  await B.getByRole('button', { name: 'Join', exact: true }).click();
+  await B.waitForURL(new RegExp(`#/g/${code}$`), { timeout: 15000 });
+  await A.getByText('Bob').waitFor({ timeout: 10000 });
+  await A.waitForFunction(() => !document.querySelector('button.btn-primary:disabled'), null, { timeout: 10000 });
+  await A.getByRole('button', { name: 'Start game' }).click();
+  await A.getByText('Get in position').waitFor({ timeout: 10000 });
+  await A.getByText('Get in position').waitFor({ state: 'detached', timeout: 12000 });
+  await B.getByText('Get in position').waitFor({ state: 'detached', timeout: 12000 });
+  return code;
+}
+
+/** A scoreboard row's cells: player, K, D, hits, accuracy, heads, nades. */
+async function row(page, name) {
+  const rows = await page.locator('table.score tbody tr').allInnerTexts();
+  return rows.map((r) => r.split('\t').map((c) => c.trim())).find((c) => c[0].endsWith(name)) ?? [];
+}
+
 async function main() {
   const annVideo = makeVideo('person', join(here, 'fixtures', 'person.y4m')); // Bob in view
   const bobVideo = makeVideo('empty', join(here, 'fixtures', 'empty.y4m')); // nobody in view
   const vite = await startVite();
+  const headVideo = makeVideo('head', join(here, 'fixtures', 'head.y4m')); // Bob's head under the crosshair
   const ann = await player('Ann', annVideo);
   const bob = await player('Bob', bobVideo);
   const A = ann.page, B = bob.page;
+  const later = []; // the second match's players, closed at the end
   try {
     console.log('Lobby');
     await A.goto(`${APP}#/`);
@@ -300,11 +334,95 @@ async function main() {
     check(count(b2, 'hurt') === 7 && count(b2, 'eliminated') === 1 && count(b2, 'distantShot:stinger') >= 8, `Bob takes 7 hits, then the eighth puts him out, and hears the SMG (${count(b2, 'distantShot:stinger')} shots)`);
     check((await A.locator('.ammo').innerText()).match(/^(\d+) \/ 30$/) !== null, `The SMG holds 30 rounds (${await A.locator('.ammo').innerText()})`);
     await A.screenshot({ path: join(out, 'ann-smg.png') });
+
+    console.log('Grenades');
+    await B.getByTestId('eliminated').waitFor({ state: 'detached', timeout: 12000 });
+    await B.locator('.hp').filter({ hasText: '100' }).waitFor({ timeout: 5000 });
+    await B.waitForTimeout(2200); // past Bob's spawn protection
+    // Bob throws one at an empty room. Ann can't know where it's going, so she gets the warning.
+    const annHeard = await A.evaluate(() => window.__ltSounds.length);
+    await B.getByTestId('grenade').dispatchEvent('pointerdown');
+    const annWarned = await A.getByTestId('grenade-warning').waitFor({ timeout: 3000 }).then(() => true, () => false);
+    check(annWarned, 'Bob throws a grenade, and Ann gets the GRENADE warning');
+    const annFuse = await A.waitForFunction((n) => window.__ltSounds.slice(n).includes('grenadeFuse'), annHeard, { timeout: 3000 }).then(() => true, () => false);
+    const annBlast = await A.waitForFunction((n) => window.__ltSounds.slice(n).includes('grenadeBlast'), annHeard, { timeout: 5000 }).then(() => true, () => false);
+    check(annFuse && annBlast, 'Ann hears the fuse beep, then it goes off somewhere else');
+    await A.waitForTimeout(500);
+    check((await A.locator('.hp').innerText()).includes('100') && (await B.locator('.hitmarker').count()) === 0, "Bob's grenade at an empty room does nothing (Ann still 100 HP, no hit marker)");
+    const bobNade = B.getByTestId('grenade');
+    const nadeCharging = (await bobNade.innerText()).trim();
+    check((await bobNade.isDisabled()) && /^\d+ S$/.test(nadeCharging), `Bob's grenade is recharging ("${nadeCharging}")`);
+    await A.getByTestId('grenade-warning').waitFor({ state: 'detached', timeout: 4000 });
+
+    // Ann throws one with Bob in view, about 4 m away: within 5 m it takes 60.
+    check((await A.locator('.frag-btn.armed').count()) === 1, "Ann's Grenade button lights up with Bob in range");
+    const annBefore = await A.evaluate(() => window.__ltSounds.length);
+    const bobBefore = await B.evaluate(() => window.__ltSounds.length);
+    await A.getByTestId('grenade').dispatchEvent('pointerdown');
+    await B.getByTestId('grenade-warning').waitFor({ timeout: 2000 });
+    const warnedAt = Date.now();
+    await A.screenshot({ path: join(out, 'ann-grenade.png') });
+    await B.locator('.hp').filter({ hasText: '40' }).waitFor({ timeout: 6000 });
+    const hitAfter = Date.now() - warnedAt;
+    check(hitAfter >= 1000, `Bob gets the warning first, and the blast lands ${hitAfter} ms later at 40 HP (60 damage)`);
+    const nadeToast = await B.getByText(/Grenade from Ann/).textContent({ timeout: 3000 }).catch(() => '');
+    check(/^Grenade from Ann(\. \d+ m)?$/.test(nadeToast ?? ''), `Bob is told: "${nadeToast}"`);
+    await B.screenshot({ path: join(out, 'bob-grenaded.png') });
+    await A.waitForTimeout(400);
+    const aNade = (await A.evaluate(() => window.__ltSounds.slice())).slice(annBefore);
+    const bNade = (await B.evaluate(() => window.__ltSounds.slice())).slice(bobBefore);
+    check(['grenadeThrow', 'grenadeBlast', 'impact'].every((x) => aNade.includes(x)) && (await A.locator('.hitmarker').count()) === 1, `Ann hears the throw, the blast and the impact, and sees a hit marker (${aNade.join(' ')})`);
+    check(bNade.includes('grenadeFuse') && bNade.includes('grenadeHurt') && !bNade.includes('grenadeBlast'), `Bob hears the fuse, then the blast right on him (${bNade.join(' ')})`);
+    check(await A.getByTestId('grenade').isDisabled(), "Ann's grenade recharges");
+
     await A.getByLabel('Menu').click();
     await A.getByRole('button', { name: 'End game' }).click();
     await A.getByTestId('scoreboard').waitFor({ timeout: 8000 });
-    const row2 = (await A.locator('table.score tbody tr').first().innerText()).split('\t').map((x) => x.trim());
-    check(row2[0].endsWith('Ann') && row2[1] === '1' && row2[3] === '8', `The database recorded 8 SMG hits and the kill (${row2.join(' | ')})`);
+    await B.getByTestId('scoreboard').waitFor({ timeout: 8000 });
+    const row2 = await row(A, 'Ann');
+    check(row2[1] === '1' && row2[3] === '8' && row2[6] === '1', `The database recorded 8 SMG hits, the kill and the grenade (${row2.join(' | ')})`);
+    const hl = await A.getByTestId('highlights').innerText().catch(() => '');
+    check(/Longest hit/i.test(hl) && /Ann · \d+\.\d m/.test(hl) && /Stinger/.test(hl), `The highlights name Ann's longest hit and her gun (${hl.replace(/\s+/g, ' ')})`);
+    const annCam = await A.getByTestId('last-kill').getAttribute('src').catch(() => null);
+    check(annCam?.startsWith('data:image/jpeg;base64,') && (await B.getByTestId('last-kill').count()) === 0, "Ann's scoreboard shows her last kill; Bob, with no kills, gets none");
+    await A.screenshot({ path: join(out, 'scoreboard-round2.png'), fullPage: true });
+
+    console.log('Headshots (a second match)');
+    const ann2 = await player('Ann', headVideo);
+    const bob2 = await player('Bob', bobVideo);
+    later.push(ann2, bob2);
+    const A2 = ann2.page, B2 = bob2.page;
+    await startMatch(A2, B2);
+    await A2.locator('.aim-name.head').filter({ hasText: 'Bob' }).waitFor({ timeout: 10000 });
+    const lock = await A2.locator('.crosshair').getAttribute('data-lock');
+    check(lock === 'head' && /HEAD/.test(await A2.locator('.aim-name').innerText()), `With the crosshair on Bob's head, it turns to HEAD (data-lock "${lock}")`);
+    await A2.screenshot({ path: join(out, 'ann-head.png') });
+    const fire2 = A2.getByTestId('fire');
+    await fire2.dispatchEvent('pointerdown');
+    await B2.locator('.hp').filter({ hasText: '50' }).waitFor({ timeout: 8000 });
+    check(true, 'One pistol headshot takes Bob to 50 HP (double damage)');
+    const headToast = await B2.getByText(/Headshot by Ann/).textContent({ timeout: 5000 }).catch(() => '');
+    check(/^Headshot by Ann's Blip(\. \d+ m)?$/.test(headToast ?? ''), `Bob is told: "${headToast}"`);
+    check((await A2.locator('.hitmarker').getAttribute('data-head')) === 'true', "Ann's hit marker shows the headshot crown");
+    await A2.screenshot({ path: join(out, 'ann-headshot.png') });
+    await A2.waitForTimeout(600);
+    await fire2.dispatchEvent('pointerdown');
+    await B2.getByTestId('eliminated').waitFor({ timeout: 8000 });
+    const elim2 = await B2.getByTestId('eliminated').textContent();
+    check(/Eliminated by Ann/.test(elim2 ?? '') && /Blip headshot/.test(elim2 ?? ''), 'The second headshot takes Bob out, and he sees "Blip headshot"');
+    await A2.waitForTimeout(400);
+    const a2 = await A2.evaluate(() => window.__ltSounds.slice());
+    const b2h = await B2.evaluate(() => window.__ltSounds.slice());
+    check(count(a2, 'headshot') === 2 && count(a2, 'kill') === 1, `Ann hears the helmet ping on both, then the kill (${a2.join(' ')})`);
+    check(count(b2h, 'hurtHead') === 1 && count(b2h, 'eliminated') === 1, `Bob hears a headshot hurt, then his elimination (${b2h.join(' ')})`);
+    await A2.getByLabel('Menu').click();
+    await A2.getByRole('button', { name: 'End game' }).click();
+    await A2.getByTestId('scoreboard').waitFor({ timeout: 8000 });
+    const row3 = await row(A2, 'Ann');
+    check(row3[1] === '1' && row3[3] === '2' && row3[5] === '2' && row3[6] === '0', `The scoreboard counts 2 hits, both headshots, and the kill (${row3.join(' | ')})`);
+    const hl2 = await A2.getByTestId('highlights').innerText().catch(() => '');
+    check(/Most headshots/i.test(hl2) && /Ann · 2 headshots/.test(hl2), `The highlights give Ann the most headshots (${hl2.replace(/\s+/g, ' ')})`);
+    await A2.screenshot({ path: join(out, 'scoreboard-headshots.png'), fullPage: true });
   } catch (e) {
     failures++;
     console.log(`  FAIL ${e.message}`);
@@ -313,6 +431,7 @@ async function main() {
   } finally {
     await ann.browser.close();
     await bob.browser.close();
+    for (const p of later) await p.browser.close();
     vite.kill();
   }
   console.log(failures ? `\n${failures} check(s) failed` : '\nAll E2E checks passed');

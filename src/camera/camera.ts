@@ -32,15 +32,26 @@ export function saveQuality(q: Quality) {
 
 export class CameraError extends Error {}
 
+/** How long to wait before asking again for a camera that reads as busy. */
+export const CAMERA_BUSY_RETRY_MS = 600;
+
 export async function openCamera(video: HTMLVideoElement, quality: Quality = savedQuality()): Promise<CameraHandle> {
   if (!window.isSecureContext) throw new CameraError('The camera only works on a secure (https) link.');
   if (!navigator.mediaDevices?.getUserMedia) throw new CameraError('This browser has no camera access.');
   const size = quality === '4k' ? { width: 3840, height: 2160 } : { width: 1920, height: 1080 };
-  let stream: MediaStream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
+  const ask = () =>
+    navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: 'environment' }, width: { ideal: size.width }, height: { ideal: size.height }, frameRate: { ideal: 30 } },
+    });
+  let stream: MediaStream;
+  try {
+    // The screen before this one may still be letting go of the camera; it reads as busy for a
+    // moment, so wait a little and ask once more before saying so.
+    stream = await ask().catch(async (e) => {
+      if ((e as DOMException)?.name !== 'NotReadableError') throw e;
+      await new Promise((r) => setTimeout(r, CAMERA_BUSY_RETRY_MS));
+      return ask();
     });
   } catch (e) {
     const name = (e as DOMException)?.name;
