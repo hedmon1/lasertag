@@ -22,6 +22,7 @@ import { go } from '../ui/router.ts';
 import { AimTag, Crosshair, HitMarker, useDetectorState, formatClock } from '../ui/hud.tsx';
 import { FlashButton, ThrownFlashbang, Whiteout, useFlashbang } from '../ui/flashbang.tsx';
 import { GrenadeButton, GrenadeWarning, ThrownGrenade, useGrenade } from '../ui/throwables.tsx';
+import { keepLastKill, roundKey } from '../ui/lastKill.ts';
 
 /** What a shot was fired with, for the messages: the gun's name, or Grenade. */
 function weaponName(s?: ShotRecord): string | null {
@@ -121,7 +122,10 @@ export function Live({ code, g }: { code: string; g: GameView }) {
       setMarker({ key: Date.now(), kill: true, head: o.head });
       sfx.kill();
       const jpg = res.killcam();
-      if (jpg) sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
+      if (jpg) {
+        sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
+        keepLastKill(roundKey(code, meta.startAt), jpg);
+      }
     }
   }
 
@@ -181,7 +185,10 @@ export function Live({ code, g }: { code: string; g: GameView }) {
         if (r.kill) {
           sfx.kill();
           const jpg = res.killcam();
-          if (jpg) sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
+          if (jpg) {
+            sendKillcam(code, r.shotId, uid, opponentId, jpg).catch(() => {});
+            keepLastKill(roundKey(code, meta.startAt), jpg);
+          }
         }
       }, GRENADE.fuseMs);
     },
